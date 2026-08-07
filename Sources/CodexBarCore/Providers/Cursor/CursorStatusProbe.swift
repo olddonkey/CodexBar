@@ -763,6 +763,8 @@ public struct CursorStatusSnapshot: Sendable {
             "Cursor Enterprise"
         case "pro":
             "Cursor Pro"
+        case "pro_plus":
+            "Cursor Pro+"
         case "hobby":
             "Cursor Hobby"
         case "team":

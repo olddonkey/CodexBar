@@ -476,6 +476,7 @@ struct CursorStatusProbeTests {
     func `formats membership types`() {
         let testCases: [(input: String, expected: String)] = [
             ("pro", "Cursor Pro"),
+            ("pro_plus", "Cursor Pro+"),
             ("hobby", "Cursor Hobby"),
             ("enterprise", "Cursor Enterprise"),
             ("team", "Cursor Team"),

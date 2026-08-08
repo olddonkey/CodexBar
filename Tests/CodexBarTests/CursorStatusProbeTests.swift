@@ -475,12 +475,19 @@ struct CursorStatusProbeTests {
     @Test
     func `formats membership types`() {
         let testCases: [(input: String, expected: String)] = [
+            ("enterprise", "Cursor Enterprise"),
+            ("express", "Cursor Start"),
+            ("free", "Cursor Free"),
+            ("free_trial", "Cursor Pro Trial"),
+            ("hobby", "Cursor Hobby"),
             ("pro", "Cursor Pro"),
             ("pro_plus", "Cursor Pro+"),
-            ("hobby", "Cursor Hobby"),
-            ("enterprise", "Cursor Enterprise"),
+            ("pro_student", "Cursor Pro"),
             ("team", "Cursor Team"),
+            ("ultra", "Cursor Ultra"),
             ("custom", "Cursor Custom"),
+            ("custom_plan", "Cursor Custom Plan"),
+            ("custom-tier", "Cursor Custom Tier"),
         ]
 
         for testCase in testCases {

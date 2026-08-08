@@ -779,9 +779,6 @@ public struct CursorStatusSnapshot: Sendable {
             "Ultra"
         default:
             type
-                .replacingOccurrences(of: "_", with: " ")
-                .replacingOccurrences(of: "-", with: " ")
-                .capitalized
         }
         return "Cursor \(planName)"
     }

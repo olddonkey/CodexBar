@@ -485,9 +485,10 @@ struct CursorStatusProbeTests {
             ("pro_student", "Cursor Pro"),
             ("team", "Cursor Team"),
             ("ultra", "Cursor Ultra"),
-            ("custom", "Cursor Custom"),
-            ("custom_plan", "Cursor Custom Plan"),
-            ("custom-tier", "Cursor Custom Tier"),
+            ("custom", "Cursor custom"),
+            ("custom_plan", "Cursor custom_plan"),
+            ("custom-tier", "Cursor custom-tier"),
+            ("Custom_Plan", "Cursor Custom_Plan"),
         ]
 
         for testCase in testCases {

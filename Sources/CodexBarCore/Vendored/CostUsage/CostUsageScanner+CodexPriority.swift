@@ -1,3 +1,8 @@
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 #if canImport(SQLite3)
 import SQLite3
@@ -18,6 +23,8 @@ extension CostUsageScanner {
         var coverageSinceEpoch: Int64
         var lastRowID: Int64
         var fileIdentity: UInt64?
+        var anchorRowID: Int64
+        var anchorDigest: String
         var turns: [String: CodexPriorityTurnMetadata]
         var requestSourcesByTurnID: [String: [Int64: CodexPriorityTurnMetadata]]
         var priorityCompletedModelsByTurnID: [String: [Int64: String]]
@@ -91,6 +98,8 @@ extension CostUsageScanner {
         var coverageSinceEpoch: Int64
         var lastRowID: Int64
         var fileIdentity: UInt64?
+        var anchorRowID: Int64 = 0
+        var anchorDigest: String = ""
         var turns: [String: CodexPriorityTurnMetadata]
         var requestSourcesByTurnID: [String: [Int64: CodexPriorityTurnMetadata]]
         var priorityCompletedModelsByTurnID: [String: [Int64: String]]
@@ -108,6 +117,8 @@ extension CostUsageScanner {
             coverageSinceEpoch: cursor.coverageSinceEpoch,
             lastRowID: cursor.lastRowID,
             fileIdentity: cursor.fileIdentity,
+            anchorRowID: cursor.anchorRowID,
+            anchorDigest: cursor.anchorDigest,
             turns: cursor.turns,
             requestSourcesByTurnID: cursor.requestSourcesByTurnID,
             priorityCompletedModelsByTurnID: cursor.priorityCompletedModelsByTurnID,
@@ -125,6 +136,8 @@ extension CostUsageScanner {
             coverageSinceEpoch: state.coverageSinceEpoch,
             lastRowID: state.lastRowID,
             fileIdentity: state.fileIdentity,
+            anchorRowID: state.anchorRowID,
+            anchorDigest: state.anchorDigest,
             turns: state.turns,
             requestSourcesByTurnID: state.requestSourcesByTurnID,
             priorityCompletedModelsByTurnID: state.priorityCompletedModelsByTurnID,
@@ -202,6 +215,10 @@ extension CostUsageScanner {
         self.codexPriorityTurnsMemo.withLock { $0[path] }
     }
 
+    static func _test_codexPriorityDatabaseFileIdentity(at url: URL) -> UInt64? {
+        self.codexPriorityDatabaseFileIdentity(at: url)
+    }
+
     static func _test_accumulateCodexPriorityTurns(
         _ db: OpaquePointer?,
         into state: inout CodexPriorityTurnsMemoState) -> Bool
@@ -270,11 +287,19 @@ extension CostUsageScanner {
         {
             state = nil
         }
+        // A missing anchor row can also be Codex pruning old rows in place (retention).
+        if let memo = state, memo.anchorRowID > 0,
+           self.codexPriorityCursorAnchorDigest(db, rowID: memo.anchorRowID) != memo.anchorDigest
+        {
+            state = nil
+        }
         var resolved = state ?? CodexPriorityTurnsMemoState(
             observationID: observationID,
             coverageSinceEpoch: requestedSinceEpoch,
             lastRowID: 0,
             fileIdentity: fileIdentity,
+            anchorRowID: 0,
+            anchorDigest: "",
             turns: [:],
             requestSourcesByTurnID: [:],
             priorityCompletedModelsByTurnID: [:],
@@ -305,6 +330,12 @@ extension CostUsageScanner {
                     untilDayKey: untilDayKey)
             }
             updated.lastRowID = maxRowID
+            guard self.captureCodexPriorityCursorAnchor(db, into: &updated) else {
+                return self.filteredResolvedCodexPriorityTurns(
+                    updated,
+                    sinceDayKey: sinceDayKey,
+                    untilDayKey: untilDayKey)
+            }
             self.storeCodexPriorityTurnsMemoIfNewer(updated, forPath: url.path)
             resolved = updated
         } else if state == nil || prunedDeletedSources {
@@ -427,6 +458,45 @@ extension CostUsageScanner {
     private static func codexPriorityDatabaseFileIdentity(at url: URL) -> UInt64? {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber]
             .flatMap { $0 as? UInt64 }
+    }
+
+    private static func captureCodexPriorityCursorAnchor(
+        _ db: OpaquePointer?,
+        into state: inout CodexPriorityTurnsMemoState) -> Bool
+    {
+        guard let digest = self.codexPriorityCursorAnchorDigest(db, rowID: state.lastRowID) else {
+            return false
+        }
+        state.anchorRowID = state.lastRowID
+        state.anchorDigest = digest
+        return true
+    }
+
+    private static func codexPriorityCursorAnchorDigest(
+        _ db: OpaquePointer?,
+        rowID: Int64) -> String?
+    {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "select ts, feedback_log_body from logs where rowid = ?",
+            -1,
+            &stmt,
+            nil) == SQLITE_OK
+        else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, rowID)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let timestamp = sqlite3_column_int64(stmt, 0)
+        var payload = Data("\(timestamp)\n".utf8)
+        if sqlite3_column_type(stmt, 1) != SQLITE_NULL {
+            let byteCount = Int(sqlite3_column_bytes(stmt, 1))
+            if byteCount > 0, let bytes = sqlite3_column_blob(stmt, 1) {
+                payload.append(Data(bytes: bytes, count: byteCount))
+            }
+        }
+        return SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func pruneDeletedCodexPrioritySources(

@@ -1,3 +1,10 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
 import Testing
 @testable import CodexBarCore
@@ -125,8 +132,33 @@ struct OpenCodexUsageParserTests {
         #expect(snapshot.sessions[0].sessionID == "chat-1")
         #expect(snapshot.sessions[0].reasoningTokens == 3)
         #expect(snapshot.costProvenance == .listPriceEstimate)
-        #expect(OpenCodexUsageStore.databaseFilename == "opencodex-usage.sqlite")
-        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("opencodex-usage.sqlite").path))
+        #expect(OpenCodexUsageStore.databaseFilename == "opencodex-usage-v2.sqlite")
+        #expect(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("opencodex-usage-v2.sqlite").path))
+    }
+
+    @Test
+    func `missing usage log parses as empty`() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenCodexUsageParserMissing-\(UUID().uuidString).jsonl")
+        #expect(try OpenCodexUsageParser.parse(fileURL: url).isEmpty)
+    }
+
+    @Test(.enabled(if: geteuid() != 0))
+    func `unreadable usage log throws instead of returning empty`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenCodexUsageParserUnreadable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("usage.jsonl")
+        try Data("{\"requestId\":\"x\"}\n".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        #expect(throws: (any Error).self) {
+            _ = try OpenCodexUsageParser.parse(fileURL: url)
+        }
     }
 
     @Test

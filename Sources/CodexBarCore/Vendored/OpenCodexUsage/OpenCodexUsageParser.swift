@@ -5,10 +5,21 @@ import Glibc
 #elseif canImport(Musl)
 import Musl
 #endif
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 
 public enum OpenCodexUsageParser {
     private static let newline: UInt8 = 0x0A
+    /// Must match `OpenCodexUsageStore`'s prefix-digest window.
+    private static let prefixDigestByteLimit = 64 * 1024
+
+    struct ChangedUnderReadError: Error, Equatable {
+        let path: String
+    }
 
     @TaskLocal static var logReadRecorderForTesting: LogReadRecorder?
 
@@ -73,31 +84,56 @@ public enum OpenCodexUsageParser {
     static func parseLog(
         fileURL: URL,
         from offset: Int64,
-        fileManager: FileManager) throws -> JSONLParseResult
+        fileManager _: FileManager) throws -> JSONLParseResult
     {
-        guard fileManager.fileExists(atPath: fileURL.path) else {
-            return JSONLParseResult(
-                entries: [],
-                nextOffset: max(0, offset),
-                bytesRead: 0,
-                completeLineCount: 0,
-                newlineTerminatedEntryCount: 0)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: fileURL)
+        } catch {
+            if Self.isConfirmedAbsence(error) {
+                return JSONLParseResult(
+                    entries: [],
+                    nextOffset: max(0, offset),
+                    bytesRead: 0,
+                    completeLineCount: 0,
+                    newlineTerminatedEntryCount: 0)
+            }
+            throw error
         }
+        defer { try? handle.close() }
 
+        var status = stat()
+        guard fstat(handle.fileDescriptor, &status) == 0 else {
+            throw Self.posixError(errno, path: fileURL.path)
+        }
+        let fileIdentity = "\(status.st_dev):\(status.st_ino)"
+        let size = Int64(status.st_size)
         let startOffset = max(0, offset)
-        let data: Data
-        if startOffset == 0 {
-            // `.mappedIfSafe` assumes the file is append-only; a shrink under an active mapping is
-            // formally undefined.
-            data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
-        } else {
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
-            try handle.seek(toOffset: UInt64(startOffset))
-            data = try handle.readToEnd() ?? Data()
+        if startOffset > size {
+            throw ChangedUnderReadError(path: fileURL.path)
         }
 
-        let parsed = self.parseJSONL(data, baseOffset: startOffset)
+        // Hold the snapshotted bytes instead of `.mappedIfSafe`. A mapping can SIGBUS if the
+        // file is truncated before those pages are touched; Swift cannot catch that. Full parse
+        // holds the file (~42 MB on a heavy machine) and only runs on a cold cache or rebuild.
+        // The steady-state path reads only the appended tail (`parsedOffset..<size`).
+        let byteCount = size - startOffset
+        let data: Data
+        if byteCount == 0 {
+            data = Data()
+        } else {
+            try handle.seek(toOffset: UInt64(startOffset))
+            data = try Self.readExact(handle, byteCount: byteCount, path: fileURL.path)
+        }
+
+        var parsed = self.parseJSONL(data, baseOffset: startOffset)
+        parsed.fileIdentity = fileIdentity
+        parsed.size = size
+        parsed.prefixDigest = try Self.prefixDigest(
+            handle: handle,
+            fileData: startOffset == 0 ? data : nil,
+            nextOffset: parsed.nextOffset,
+            path: fileURL.path)
         self.logReadRecorderForTesting?.record(bytes: parsed.bytesRead, lines: parsed.completeLineCount)
         return parsed
     }
@@ -108,6 +144,29 @@ public enum OpenCodexUsageParser {
         var bytesRead: Int64
         var completeLineCount: Int
         var newlineTerminatedEntryCount: Int
+        var fileIdentity: String?
+        var size: Int64
+        var prefixDigest: String
+
+        init(
+            entries: [OpenCodexUsageEntry],
+            nextOffset: Int64,
+            bytesRead: Int64,
+            completeLineCount: Int,
+            newlineTerminatedEntryCount: Int,
+            fileIdentity: String? = nil,
+            size: Int64 = 0,
+            prefixDigest: String = "")
+        {
+            self.entries = entries
+            self.nextOffset = nextOffset
+            self.bytesRead = bytesRead
+            self.completeLineCount = completeLineCount
+            self.newlineTerminatedEntryCount = newlineTerminatedEntryCount
+            self.fileIdentity = fileIdentity
+            self.size = size
+            self.prefixDigest = prefixDigest
+        }
 
         var newlineTerminatedEntries: [OpenCodexUsageEntry] {
             Array(self.entries.prefix(self.newlineTerminatedEntryCount))
@@ -292,5 +351,63 @@ public enum OpenCodexUsageParser {
             return intValue >= 0 ? intValue : nil
         }
         return nil
+    }
+
+    private static func prefixDigest(
+        handle: FileHandle,
+        fileData: Data?,
+        nextOffset: Int64,
+        path: String) throws -> String
+    {
+        let length = min(Int64(Self.prefixDigestByteLimit), max(0, nextOffset))
+        let prefix: Data
+        if length == 0 {
+            prefix = Data()
+        } else if let fileData, Int64(fileData.count) >= length {
+            prefix = Data(fileData.prefix(Int(length)))
+        } else {
+            try handle.seek(toOffset: 0)
+            prefix = try Self.readExact(handle, byteCount: length, path: path)
+        }
+        return SHA256.hash(data: prefix).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func readExact(_ handle: FileHandle, byteCount: Int64, path: String) throws -> Data {
+        let count = Int(byteCount)
+        var data = Data()
+        data.reserveCapacity(count)
+        while data.count < count {
+            let chunk = try handle.read(upToCount: count - data.count) ?? Data()
+            if chunk.isEmpty {
+                throw ChangedUnderReadError(path: path)
+            }
+            data.append(chunk)
+        }
+        return data
+    }
+
+    private static func isConfirmedAbsence(_ error: Error) -> Bool {
+        var current: Error? = error
+        while let err = current {
+            let nsError = err as NSError
+            if nsError.domain == NSPOSIXErrorDomain {
+                return nsError.code == Int(ENOENT) || nsError.code == Int(ENOTDIR)
+            }
+            if nsError.domain == NSCocoaErrorDomain,
+               nsError.code == CocoaError.fileReadNoSuchFile.rawValue
+               || nsError.code == CocoaError.fileNoSuchFile.rawValue
+            {
+                return true
+            }
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? Error
+        }
+        return false
+    }
+
+    private static func posixError(_ code: Int32, path: String) -> NSError {
+        NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(code),
+            userInfo: [NSFilePathErrorKey: path])
     }
 }

@@ -1,3 +1,10 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
 import SQLite3
 import Testing
@@ -196,15 +203,19 @@ struct OpenCodexUsageStoreIncrementalTests {
         try Harness.writeV1Database(
             at: harness.cacheRoot.appendingPathComponent(OpenCodexUsageStore.databaseFilename),
             staleRequestID: "stale-v1")
+        let legacyURL = harness.cacheRoot.appendingPathComponent("opencodex-usage.sqlite")
+        try Harness.writeV1Database(at: legacyURL, staleRequestID: "legacy-v1")
 
         let entries = try harness.store.loadEntries(logURL: harness.log)
         let schemaExpected = try harness.referenceEntries()
         #expect(entries == schemaExpected)
         #expect(entries.map(\.requestID) == ["live"])
         #expect(entries.contains { $0.requestID == "stale-v1" } == false)
+        #expect(entries.contains { $0.requestID == "legacy-v1" } == false)
         #expect(entries[0].usage?.inputTokens == 9)
         #expect(entries[0].usage?.outputTokens == 2)
         #expect(entries[0].totalTokens == 11)
+        #expect(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
     @Test
@@ -444,6 +455,80 @@ struct OpenCodexUsageStoreIncrementalTests {
         }
         #expect(cached == loaded)
         #expect(recorder.snapshot().bytesRead == 0)
+    }
+
+    @Test
+    func `incremental load of log A does not keep another home's cached rows`() throws {
+        let harness = try Harness.make()
+        defer { harness.tearDown() }
+
+        try harness.writeLines(
+            Harness.line(id: "a-seed-1", input: 1),
+            Harness.line(id: "a-seed-2", input: 2))
+        _ = try harness.store.loadEntries(logURL: harness.log)
+        try harness.appendLines(Harness.line(id: "a-tail", input: 3))
+
+        let logB = harness.root.appendingPathComponent("usage-b.jsonl")
+        try Data([
+            Harness.line(id: "b-1", input: 11) + "\n",
+            Harness.line(id: "b-2", input: 12) + "\n",
+        ].joined().utf8).write(to: logB)
+
+        let store = harness.store
+        let loaded = try OpenCodexUsageStore.withIncrementalPostParseHookForTesting {
+            do {
+                _ = try store.loadEntries(logURL: logB)
+            } catch {
+                Issue.record(error)
+            }
+        } operation: {
+            try store.loadEntries(logURL: harness.log)
+        }
+
+        let expected = try harness.referenceEntries()
+        #expect(loaded == expected)
+        #expect(loaded.map(\.requestID) == ["a-seed-1", "a-seed-2", "a-tail"])
+        #expect(Set(loaded.map(\.requestID)).isDisjoint(with: ["b-1", "b-2"]))
+        #expect(try harness.sqliteRequestIDs() == ["a-seed-1", "a-seed-2", "a-tail"].sorted())
+        #expect(try harness.sqliteRequestIDs().contains("b-1") == false)
+        #expect(try harness.sqliteRequestIDs().contains("b-2") == false)
+    }
+
+    @Test
+    func `missing log returns an empty snapshot without throwing`() throws {
+        let harness = try Harness.make()
+        defer { harness.tearDown() }
+        #expect(try harness.store.loadEntries(logURL: harness.log) == [])
+    }
+
+    @Test
+    func `stat failure other than absence throws instead of returning empty`() throws {
+        let harness = try Harness.make()
+        defer { harness.tearDown() }
+        let loop = harness.root.appendingPathComponent("loop.jsonl")
+        try FileManager.default.createSymbolicLink(
+            atPath: loop.path,
+            withDestinationPath: loop.lastPathComponent)
+        #expect(throws: (any Error).self) {
+            _ = try harness.store.loadEntries(logURL: loop)
+        }
+    }
+
+    @Test(.enabled(if: geteuid() != 0))
+    func `permission failure on the log directory throws instead of returning empty`() throws {
+        let harness = try Harness.make()
+        let logDir = harness.root.appendingPathComponent("logdir", isDirectory: true)
+        try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        let log = logDir.appendingPathComponent("usage.jsonl")
+        try Data((Harness.line(id: "hidden", input: 1) + "\n").utf8).write(to: log)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: logDir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: logDir.path)
+            harness.tearDown()
+        }
+        #expect(throws: (any Error).self) {
+            _ = try harness.store.loadEntries(logURL: log)
+        }
     }
 }
 

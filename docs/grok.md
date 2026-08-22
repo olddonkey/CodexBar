@@ -122,6 +122,16 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 - Credits `subscriptionTier` maps SuperGrok vs SuperGrok Heavy on the plan badge.
   SuperGrok Heavy with no `creditUsagePercent` is unknown usage, not 0%.
 
+## OpenCodex usage
+
+OpenCodex traffic authenticated with Grok OAuth credentials burns the same Grok
+subscription. When **Include OpenCodex usage logs** is enabled, entries carrying the
+`xai` provider prefix appear on the Grok row in **Usage & Spend**, with dollars shown
+as a public xAI list-price estimate. The Grok provider page continues to show local
+token and spend data only from the native Grok CLI's own session logs.
+
+Like the existing `openai` → Codex mapping, this attribution routes only on the
+OpenCodex provider prefix. It does not distinguish OAuth traffic from API-key traffic.
 
 ## JSON-RPC contract
 

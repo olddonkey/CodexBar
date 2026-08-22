@@ -432,6 +432,9 @@ enum ModelsDevCache {
     static let ttlSeconds: TimeInterval = 24 * 60 * 60
 
     private static let memo = ModelsDevCacheMemo()
+    /// Test-only instrumentation: counts `fileMetadata(at:)` reads (one per `load`) so tests can prove callers
+    /// resolve the catalog once instead of per pricing call. Task-local, so concurrent tests do not see each other's
+    /// counts, and unset (zero cost) in production.
     @TaskLocal private static var metadataReadRecorder: MetadataReadRecorder?
 
     final class MetadataReadRecorder: @unchecked Sendable {

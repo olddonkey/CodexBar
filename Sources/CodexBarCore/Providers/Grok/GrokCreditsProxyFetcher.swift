@@ -59,30 +59,54 @@ public enum GrokCreditsProxyFetcher {
         let resetsAt =
             config.currentPeriod?.end.flatMap(Self.parseISO8601)
             ?? config.billingPeriodEnd.flatMap(Self.parseISO8601)
+        let windowMinutes =
+            Self.windowMinutes(
+                start: config.currentPeriod?.start,
+                end: config.currentPeriod?.end)
+            ?? Self.windowMinutes(
+                start: config.billingPeriodStart,
+                end: config.billingPeriodEnd)
+        let productUsage = (config.productUsage ?? []).compactMap { entry -> GrokProductUsage? in
+            guard let product = entry.product, !product.isEmpty else { return nil }
+            return GrokProductUsage(product: product, usagePercent: entry.usagePercent)
+        }
+        let onDemandUsedPercent: Double? = if let cap = config.onDemandCap?.val,
+                                              cap > 0,
+                                              let used = config.onDemandUsed?.val
+        {
+            min(100, max(0, used / cap * 100))
+        } else {
+            nil
+        }
 
         if let percent = config.creditUsagePercent, percent.isFinite {
             return GrokWebBillingSnapshot(
                 usedPercent: min(100, max(0, percent)),
                 resetsAt: resetsAt,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                windowMinutes: windowMinutes,
+                productUsage: productUsage,
+                onDemandUsedPercent: onDemandUsedPercent)
         }
 
-        if let cap = config.onDemandCap?.val,
-           cap > 0,
-           let used = config.onDemandUsed?.val
-        {
-            let percent = min(100, max(0, used / cap * 100))
+        if let onDemandUsedPercent {
             return GrokWebBillingSnapshot(
-                usedPercent: percent,
+                usedPercent: onDemandUsedPercent,
                 resetsAt: resetsAt,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                windowMinutes: windowMinutes,
+                productUsage: productUsage,
+                onDemandUsedPercent: onDemandUsedPercent)
         }
 
         if resetsAt != nil {
             return GrokWebBillingSnapshot(
                 usedPercent: 0,
                 resetsAt: resetsAt,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                windowMinutes: windowMinutes,
+                productUsage: productUsage,
+                onDemandUsedPercent: onDemandUsedPercent)
         }
 
         throw GrokWebBillingError.parseFailed
@@ -98,6 +122,19 @@ public enum GrokCreditsProxyFetcher {
         return formatter.date(from: raw)
     }
 
+    private static func windowMinutes(start rawStart: String?, end rawEnd: String?) -> Int? {
+        guard let rawStart,
+              let rawEnd,
+              let start = parseISO8601(rawStart),
+              let end = parseISO8601(rawEnd),
+              end > start
+        else {
+            return nil
+        }
+        let minutes = Int(end.timeIntervalSince(start) / 60)
+        return minutes > 0 ? minutes : nil
+    }
+
     private struct CreditsResponse: Decodable {
         let config: CreditsConfig?
         let subscriptionTier: String?
@@ -106,14 +143,25 @@ public enum GrokCreditsProxyFetcher {
     private struct CreditsConfig: Decodable {
         let creditUsagePercent: Double?
         let currentPeriod: CurrentPeriod?
+        let billingPeriodStart: String?
         let billingPeriodEnd: String?
+        let productUsage: [ProductUsageEntry]?
+        // `val` has no declared unit, and the parallel CLI RPC models amounts as cents. Decode cap/used
+        // only to derive a percentage; prepaid balance stays intentionally undecoded until a nonzero
+        // payload can establish whether this proxy reports cents or dollars.
         let onDemandCap: CreditsAmount?
         let onDemandUsed: CreditsAmount?
         let subscriptionTier: String?
     }
 
     private struct CurrentPeriod: Decodable {
+        let start: String?
         let end: String?
+    }
+
+    private struct ProductUsageEntry: Decodable {
+        let product: String?
+        let usagePercent: Double?
     }
 
     /// The proxy reports amounts as `{ "val": <number> }`; accept fractional values so an unusual

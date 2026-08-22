@@ -102,6 +102,47 @@ struct GrokWebBillingFetcherTests {
 
         #expect(snapshot.usedPercent == 42.5)
         #expect(snapshot.resetsAt == Date(timeIntervalSince1970: TimeInterval(reset)))
+        #expect(snapshot.windowMinutes == nil)
+    }
+
+    @Test
+    func `parses weekly period from grok grpc web billing frame`() throws {
+        let start = UInt64(1_800_000_000)
+        let end = start + 604_800
+        let payload = Self.protobufPayload(
+            usedPercent: 42.5,
+            periodStartEpoch: start,
+            periodEndEpoch: end)
+        let data = Self.grpcFrame(payload)
+
+        let snapshot = try GrokWebBillingFetcher.parseGRPCWebResponse(
+            data,
+            now: Date(timeIntervalSince1970: 1_799_000_000))
+
+        #expect(snapshot.usedPercent == 42.5)
+        #expect(snapshot.resetsAt == Date(timeIntervalSince1970: TimeInterval(end)))
+        #expect(snapshot.windowMinutes == 10080)
+        #expect(snapshot.productUsage.isEmpty)
+    }
+
+    @Test
+    func `rejects out of range grok grpc web billing period timestamps`() throws {
+        let reset = UInt64(1_800_000_000)
+        var payload = Self.protobufPayload(
+            usedPercent: 42.5,
+            periodStartEpoch: 1,
+            periodEndEpoch: 2)
+        payload.append(0x10) // field 2, varint reset timestamp
+        payload.append(contentsOf: Self.varint(reset))
+        let data = Self.grpcFrame(payload)
+
+        let snapshot = try GrokWebBillingFetcher.parseGRPCWebResponse(
+            data,
+            now: Date(timeIntervalSince1970: 1_799_000_000))
+
+        #expect(snapshot.usedPercent == 42.5)
+        #expect(snapshot.resetsAt == Date(timeIntervalSince1970: TimeInterval(reset)))
+        #expect(snapshot.windowMinutes == nil)
     }
 
     @Test
@@ -970,7 +1011,8 @@ extension GrokWebBillingFetcherTests {
             billing: nil,
             webBilling: GrokWebBillingSnapshot(
                 usedPercent: 67.25,
-                resetsAt: Date(timeIntervalSince1970: 1_800_000_003)),
+                resetsAt: Date(timeIntervalSince1970: 1_800_000_003),
+                windowMinutes: 10080),
             credentials: Self.credentials,
             localSummary: nil,
             cliVersion: nil,
@@ -979,10 +1021,74 @@ extension GrokWebBillingFetcherTests {
         let usage = snapshot.toUsageSnapshot()
 
         #expect(usage.primary?.usedPercent == 67.25)
-        #expect(usage.primary?.windowMinutes == nil)
+        #expect(usage.primary?.windowMinutes == 10080)
         #expect(usage.primary?.resetsAt == Date(timeIntervalSince1970: 1_800_000_003))
+        #expect(usage.extraRateWindows == nil)
         #expect(usage.accountEmail(for: .grok) == "grok@example.com")
         #expect(usage.loginMethod(for: .grok) == "SuperGrok")
+    }
+
+    @Test
+    func `product usage is carried but never projected as an independent quota window`() throws {
+        let reset = Date(timeIntervalSince1970: 1_800_000_003)
+        let products = [
+            GrokProductUsage(product: "GrokBuild", usagePercent: 25),
+            GrokProductUsage(product: "GrokImagine", usagePercent: 35),
+        ]
+        let withoutOnDemand = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(
+                usedPercent: 60,
+                resetsAt: reset,
+                windowMinutes: 10080,
+                productUsage: products),
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_799_000_000))
+        let withOnDemand = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(
+                usedPercent: 60,
+                resetsAt: reset,
+                windowMinutes: 10080,
+                productUsage: products,
+                onDemandUsedPercent: 30),
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_799_000_000))
+
+        #expect(withoutOnDemand.webBilling?.productUsage == products)
+        #expect(withoutOnDemand.toUsageSnapshot().extraRateWindows == nil)
+
+        let windows = try #require(withOnDemand.toUsageSnapshot().extraRateWindows)
+        #expect(withOnDemand.webBilling?.productUsage == products)
+        #expect(windows.map(\.id) == ["grok.onDemand"])
+        #expect(windows.map(\.title) == ["On-demand"])
+        #expect(windows.map(\.window.usedPercent) == [30])
+        #expect(windows[0].window.windowMinutes == nil)
+        #expect(windows[0].window.resetsAt == reset)
+    }
+
+    @Test
+    func `switcher weekly window ignores higher on demand usage without a reported cadence`() throws {
+        let usage = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(
+                usedPercent: 20,
+                resetsAt: Date(timeIntervalSince1970: 1_800_000_003),
+                windowMinutes: 10080,
+                onDemandUsedPercent: 90),
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_799_000_000))
+            .toUsageSnapshot()
+
+        let window = try #require(usage.switcherWeeklyWindow(for: .grok, showUsed: true))
+        #expect(window.usedPercent == 20)
+        #expect(window.windowMinutes == 10080)
     }
 
     @Test
@@ -1031,6 +1137,7 @@ extension GrokWebBillingFetcherTests {
         let usage = snapshot.toUsageSnapshot()
 
         #expect(usage.primary?.usedPercent == 0)
+        #expect(usage.primary?.windowMinutes == 10080)
         #expect(usage.loginMethod(for: .grok) == "SuperGrok Heavy")
     }
 
@@ -1103,6 +1210,34 @@ extension GrokWebBillingFetcherTests {
         withUnsafeBytes(of: &percentBits) { data.append(contentsOf: $0) }
         data.append(0x10) // field 2, varint
         data.append(contentsOf: Self.varint(resetEpoch))
+        return data
+    }
+
+    private static func protobufPayload(
+        usedPercent: Float,
+        periodStartEpoch: UInt64,
+        periodEndEpoch: UInt64) -> Data
+    {
+        var config = Data()
+        config.append(0x0D) // field 1, fixed32
+        var percentBits = usedPercent.bitPattern.littleEndian
+        withUnsafeBytes(of: &percentBits) { config.append(contentsOf: $0) }
+        config.append(contentsOf: Self.timestampField(fieldNumber: 4, epoch: periodStartEpoch))
+        config.append(contentsOf: Self.timestampField(fieldNumber: 5, epoch: periodEndEpoch))
+
+        var data = Data([0x0A]) // field 1, length-delimited billing config
+        data.append(contentsOf: Self.varint(UInt64(config.count)))
+        data.append(config)
+        return data
+    }
+
+    private static func timestampField(fieldNumber: UInt8, epoch: UInt64) -> Data {
+        var timestamp = Data([0x08]) // field 1, seconds
+        timestamp.append(contentsOf: Self.varint(epoch))
+
+        var data = Data([(fieldNumber << 3) | 0x02])
+        data.append(contentsOf: Self.varint(UInt64(timestamp.count)))
+        data.append(timestamp)
         return data
     }
 

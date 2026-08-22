@@ -8,11 +8,26 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
     public let usedPercent: Double?
     public let resetsAt: Date?
     public let subscriptionTier: String?
+    public let windowMinutes: Int?
+    /// Product usage is a decomposition of `usedPercent`; it must not be projected into `extraRateWindows`
+    /// or any other independent-quota surface, and is currently carried for future breakdown UI.
+    public let productUsage: [GrokProductUsage]
+    public let onDemandUsedPercent: Double?
 
-    public init(usedPercent: Double?, resetsAt: Date?, subscriptionTier: String? = nil) {
+    public init(
+        usedPercent: Double?,
+        resetsAt: Date?,
+        subscriptionTier: String? = nil,
+        windowMinutes: Int? = nil,
+        productUsage: [GrokProductUsage] = [],
+        onDemandUsedPercent: Double? = nil)
+    {
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
         self.subscriptionTier = subscriptionTier
+        self.windowMinutes = windowMinutes
+        self.productUsage = productUsage
+        self.onDemandUsedPercent = onDemandUsedPercent
     }
 
     /// Overlay the CLI settings plan name. Usage percent stays on the existing credits rules.
@@ -20,7 +35,20 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
         GrokWebBillingSnapshot(
             usedPercent: self.usedPercent,
             resetsAt: self.resetsAt,
-            subscriptionTier: GrokPlan.displayName(from: raw) ?? self.subscriptionTier)
+            subscriptionTier: GrokPlan.displayName(from: raw) ?? self.subscriptionTier,
+            windowMinutes: self.windowMinutes,
+            productUsage: self.productUsage,
+            onDemandUsedPercent: self.onDemandUsedPercent)
+    }
+}
+
+public struct GrokProductUsage: Sendable, Equatable {
+    public let product: String
+    public let usagePercent: Double?
+
+    public init(product: String, usagePercent: Double?) {
+        self.product = product
+        self.usagePercent = usagePercent
     }
 }
 
@@ -92,6 +120,8 @@ public enum GrokWebBillingFetcher {
     public static let defaultEndpoint =
         URL(string: "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig")!
     private static let requestTimeoutSeconds: TimeInterval = 15
+    private static let plausibleUnixTimestampRange: ClosedRange<UInt64> =
+        1_700_000_000...2_100_000_000
 
     public static func fetch(
         credentials: GrokCredentials,
@@ -265,7 +295,7 @@ public enum GrokWebBillingFetcher {
 
         let resetFields = scan.varintFields.compactMap { field -> (path: [UInt64], date: Date)? in
             let raw = field.value
-            guard raw >= 1_700_000_000, raw <= 2_100_000_000 else { return nil }
+            guard Self.plausibleUnixTimestampRange.contains(raw) else { return nil }
             return (field.path, Date(timeIntervalSince1970: TimeInterval(raw)))
         }
         let futureResetFields = resetFields.filter { $0.date > now }
@@ -278,6 +308,23 @@ public enum GrokWebBillingFetcher {
                 .map(\.date)
                 .min()
 
+        let periodStart = scan.varintFields.first {
+            $0.path == [1, 4, 1] && Self.plausibleUnixTimestampRange.contains($0.value)
+        }?.value
+        let periodEnd = scan.varintFields.first {
+            $0.path == [1, 5, 1] && Self.plausibleUnixTimestampRange.contains($0.value)
+        }?.value
+        let windowMinutes: Int? = if let periodStart,
+                                     let periodEnd,
+                                     periodEnd > periodStart,
+                                     let minutes = Int(exactly: (periodEnd - periodStart) / 60),
+                                     minutes > 0
+        {
+            minutes
+        } else {
+            nil
+        }
+
         let hasUsagePeriod = scan.varintFields.contains { field in
             field.path.starts(with: [1, 6])
                 || (field.path == [1, 8, 1] && (field.value == 1 || field.value == 2))
@@ -287,7 +334,12 @@ public enum GrokWebBillingFetcher {
         guard let percent = parsedPercent ?? (noUsageYet ? 0 : nil) else {
             throw GrokWebBillingError.parseFailed
         }
-        return GrokWebBillingSnapshot(usedPercent: percent, resetsAt: reset)
+        // Product breakdowns in this protobuf are enum IDs, not names. Leave them empty rather than
+        // inventing user-visible labels without a verified enum mapping.
+        return GrokWebBillingSnapshot(
+            usedPercent: percent,
+            resetsAt: reset,
+            windowMinutes: windowMinutes)
     }
 
     static func looksLikeProtobufPayload(_ data: Data) -> Bool {

@@ -45,14 +45,16 @@ public struct GrokUsageSnapshot: Sendable {
         } else if let webBilling,
                   let percent = webBilling.usedPercent
         {
-            // Do not infer the full quota cadence from the remaining time until reset; a
-            // monthly window near its reset would otherwise be misclassified as weekly.
+            // Read the full quota cadence from the reported period when available. Fall back to
+            // reset-countdown inference only when the payload does not provide the period.
             primary = RateWindow(
                 usedPercent: percent,
-                windowMinutes: nil,
+                windowMinutes: webBilling.windowMinutes,
                 resetsAt: webBilling.resetsAt,
                 resetDescription: nil)
         }
+
+        let extraRateWindows = self.extraRateWindows(primary: primary)
 
         let identity = ProviderIdentitySnapshot(
             providerID: .grok,
@@ -66,10 +68,31 @@ public struct GrokUsageSnapshot: Sendable {
             primary: primary,
             secondary: nil,
             tertiary: nil,
+            extraRateWindows: extraRateWindows,
             costUsage: self.localSummary?.toCostUsageTokenSnapshot(
                 historyDays: GrokLocalSessionScanner.maximumLookbackDays),
             updatedAt: self.updatedAt,
             identity: identity)
+    }
+
+    private func extraRateWindows(primary: RateWindow?) -> [NamedRateWindow]? {
+        guard let webBilling = self.webBilling,
+              let primary,
+              let onDemandUsedPercent = webBilling.onDemandUsedPercent
+        else {
+            return nil
+        }
+        // The on-demand cap's own period is not reported, so deliberately do not claim the credit cadence.
+        return [
+            NamedRateWindow(
+                id: "grok.onDemand",
+                title: "On-demand",
+                window: RateWindow(
+                    usedPercent: onDemandUsedPercent,
+                    windowMinutes: nil,
+                    resetsAt: primary.resetsAt,
+                    resetDescription: nil)),
+        ]
     }
 }
 

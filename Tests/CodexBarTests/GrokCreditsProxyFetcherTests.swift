@@ -27,15 +27,25 @@ struct GrokCreditsProxyFetcherTests {
                 body: """
                 {
                   "config": {
-                    "creditUsagePercent": 12.5,
                     "currentPeriod": {
                       "type": "USAGE_PERIOD_TYPE_WEEKLY",
-                      "start": "2026-08-06T00:00:00Z",
-                      "end": "2026-08-13T00:00:00Z"
+                      "start": "2026-08-16T18:42:45.537749+00:00",
+                      "end": "2026-08-23T18:42:45.537749+00:00"
                     },
-                    "billingPeriodEnd": "2026-08-13T00:00:00Z",
-                    "onDemandCap": { "val": 1000 },
-                    "onDemandUsed": { "val": 250 }
+                    "creditUsagePercent": 20.0,
+                    "onDemandCap": { "val": 0 },
+                    "onDemandUsed": { "val": 0 },
+                    "productUsage": [
+                      { "product": "GrokBuild", "usagePercent": 20.0 },
+                      { "product": "GrokAppBuilder" },
+                      { "product": "GrokChat" },
+                      { "product": "GrokImagine" }
+                    ],
+                    "isUnifiedBillingUser": true,
+                    "prepaidBalance": { "val": 0 },
+                    "topUpMethod": "TOP_UP_METHOD_SAVED_PAYMENT_METHOD",
+                    "billingPeriodStart": "2026-08-16T18:42:45.537749+00:00",
+                    "billingPeriodEnd": "2026-08-23T18:42:45.537749+00:00"
                   }
                 }
                 """)
@@ -45,12 +55,20 @@ struct GrokCreditsProxyFetcherTests {
             credentials: Self.credentials,
             session: session,
             endpoint: endpoint)
-        let expectedReset = try Self.date("2026-08-13T00:00:00Z")
+        let expectedReset = try Self.date("2026-08-23T18:42:45.537749+00:00")
 
         #expect(GrokCreditsProxyStubURLProtocol.requests.count == 1)
-        #expect(snapshot.usedPercent == 12.5)
+        #expect(snapshot.usedPercent == 20)
         #expect(snapshot.resetsAt == expectedReset)
         #expect(snapshot.subscriptionTier == nil)
+        #expect(snapshot.windowMinutes == 10080)
+        #expect(snapshot.productUsage == [
+            GrokProductUsage(product: "GrokBuild", usagePercent: 20),
+            GrokProductUsage(product: "GrokAppBuilder", usagePercent: nil),
+            GrokProductUsage(product: "GrokChat", usagePercent: nil),
+            GrokProductUsage(product: "GrokImagine", usagePercent: nil),
+        ])
+        #expect(snapshot.onDemandUsedPercent == nil)
     }
 
     @Test
@@ -68,6 +86,136 @@ struct GrokCreditsProxyFetcherTests {
 
         #expect(snapshot.usedPercent == 25.05)
         #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.onDemandUsedPercent == 25.05)
+    }
+
+    @Test
+    func `uses billing period dates when current period is absent`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 10,
+            "billingPeriodStart": "2026-08-16T18:42:45.537749+00:00",
+            "billingPeriodEnd": "2026-08-23T18:42:45.537749+00:00"
+          }
+        }
+        """.utf8))
+
+        #expect(snapshot.windowMinutes == 10080)
+        #expect(try snapshot.resetsAt == Self.date("2026-08-23T18:42:45.537749+00:00"))
+        #expect(snapshot.usedPercent == 10)
+    }
+
+    @Test
+    func `keeps usage when neither billing period pair is present`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 14,
+            "productUsage": [{ "product": "GrokChat", "usagePercent": 7 }]
+          }
+        }
+        """.utf8))
+
+        #expect(snapshot.windowMinutes == nil)
+        #expect(snapshot.resetsAt == nil)
+        #expect(snapshot.usedPercent == 14)
+        #expect(snapshot.productUsage == [GrokProductUsage(product: "GrokChat", usagePercent: 7)])
+    }
+
+    @Test
+    func `rejects zero and negative period durations`() throws {
+        let equal = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 4,
+            "currentPeriod": {
+              "start": "2026-08-23T18:42:45Z",
+              "end": "2026-08-23T18:42:45Z"
+            }
+          }
+        }
+        """.utf8))
+        let reversed = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 5,
+            "currentPeriod": {
+              "start": "2026-08-24T18:42:45Z",
+              "end": "2026-08-23T18:42:45Z"
+            }
+          }
+        }
+        """.utf8))
+
+        #expect(equal.windowMinutes == nil)
+        #expect(reversed.windowMinutes == nil)
+    }
+
+    @Test
+    func `carries clamped on demand percent beside primary credits percent`() throws {
+        let over = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 40,
+            "onDemandCap": { "val": 100 },
+            "onDemandUsed": { "val": 125 }
+          }
+        }
+        """.utf8))
+        let under = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 41,
+            "onDemandCap": { "val": 100 },
+            "onDemandUsed": { "val": -25 }
+          }
+        }
+        """.utf8))
+
+        #expect(over.usedPercent == 40)
+        #expect(over.onDemandUsedPercent == 100)
+        #expect(under.usedPercent == 41)
+        #expect(under.onDemandUsedPercent == 0)
+    }
+
+    @Test
+    func `drops unnamed products and preserves missing product percentages`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 8,
+            "productUsage": [
+              { "usagePercent": 3 },
+              { "product": "" },
+              { "product": "GrokImagine" }
+            ]
+          }
+        }
+        """.utf8))
+
+        #expect(snapshot.productUsage == [GrokProductUsage(product: "GrokImagine", usagePercent: nil)])
+    }
+
+    @Test
+    func `applying a subscription tier preserves proxy billing details`() {
+        let reset = Date(timeIntervalSince1970: 1_800_000_000)
+        let products = [GrokProductUsage(product: "GrokBuild", usagePercent: 20)]
+        let snapshot = GrokWebBillingSnapshot(
+            usedPercent: 20,
+            resetsAt: reset,
+            windowMinutes: 10080,
+            productUsage: products,
+            onDemandUsedPercent: 25)
+
+        let applied = snapshot.applying(subscriptionTier: "SuperGrok Heavy")
+
+        #expect(applied.usedPercent == 20)
+        #expect(applied.resetsAt == reset)
+        #expect(applied.subscriptionTier == "SuperGrok Heavy")
+        #expect(applied.windowMinutes == 10080)
+        #expect(applied.productUsage == products)
+        #expect(applied.onDemandUsedPercent == 25)
     }
 
     @Test

@@ -28,11 +28,27 @@ public struct OpenCodexUsageStore: Sendable {
         self.databaseURL = cacheRoot.appendingPathComponent(Self.databaseFilename, isDirectory: false)
     }
 
+    /// Test-only. Unset in production; the optional call in `incrementalReload` is a no-op.
+    @TaskLocal private static var incrementalPostParseHookForTesting: (@Sendable () -> Void)?
+
     static func withLogReadRecorderForTesting<T>(
         _ recorder: OpenCodexUsageParser.LogReadRecorder,
         operation: () throws -> T) rethrows -> T
     {
         try OpenCodexUsageParser.withLogReadRecorderForTesting(recorder, operation: operation)
+    }
+
+    static func withIncrementalPostParseHookForTesting<T>(
+        _ hook: @escaping @Sendable () -> Void,
+        operation: () throws -> T) rethrows -> T
+    {
+        try self.$incrementalPostParseHookForTesting.withValue(hook) {
+            try operation()
+        }
+    }
+
+    static func incrementalPostParseHookInstalledForTesting() -> Bool {
+        self.incrementalPostParseHookForTesting != nil
     }
 
     public func loadSnapshot(
@@ -143,6 +159,16 @@ public struct OpenCodexUsageStore: Sendable {
             fileURL: logURL,
             from: cursor.parsedOffset,
             fileManager: fileManager)
+        Self.incrementalPostParseHookForTesting?()
+        // Closes the TOCTOU window between the pre-read `canReuseCursor` check and this tail
+        // parse: a rotation or replacement in that window would otherwise merge cached rows from
+        // the old file with bytes from the new one and persist a cursor for a path that no longer
+        // names that file. A replacement that preserves path, st_dev, st_ino, size, AND the first
+        // min(64 KiB, parsedOffset) bytes remains undetectable.
+        guard let postIdentity = Self.statLog(at: logURL) else { return [] }
+        if !Self.isSameLogAfterTailRead(preRead: identity, postRead: postIdentity, cursor: cursor) {
+            return try self.fullReload(logURL: logURL, identity: postIdentity, fileManager: fileManager)
+        }
         let nextOffset = parsed.nextOffset
         let committed = parsed.newlineTerminatedEntries
         let pending = parsed.pendingTrailingEntries
@@ -303,6 +329,16 @@ public struct OpenCodexUsageStore: Sendable {
             && cursor.fileIdentity == identity.fileIdentity
             && identity.size >= cursor.parsedOffset
             && self.prefixDigest(fileURL: identity.url, parsedOffset: cursor.parsedOffset) == cursor.prefixDigest
+    }
+
+    private static func isSameLogAfterTailRead(
+        preRead: LogIdentity,
+        postRead: LogIdentity,
+        cursor: ParseCursor) -> Bool
+    {
+        postRead.path == preRead.path
+            && postRead.fileIdentity == preRead.fileIdentity
+            && self.canReuseCursor(cursor, identity: postRead)
     }
 
     private static func ensureSchema(_ db: OpaquePointer?) {

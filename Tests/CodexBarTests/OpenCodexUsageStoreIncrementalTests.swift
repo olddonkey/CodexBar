@@ -370,6 +370,81 @@ struct OpenCodexUsageStoreIncrementalTests {
         #expect(recovered == expected)
         #expect(recovered.map(\.requestID) == ["seed", "tail"])
     }
+
+    @Test
+    func `incremental post-parse hook is unset by default`() {
+        #expect(OpenCodexUsageStore.incrementalPostParseHookInstalledForTesting() == false)
+    }
+
+    @Test
+    func `post-parse replacement longer than the cursor falls back to a full parse`() throws {
+        try self.assertPostParseReplacementFallsBack(longerThanCursor: true)
+    }
+
+    @Test
+    func `post-parse replacement shorter than the cursor falls back to a full parse`() throws {
+        try self.assertPostParseReplacementFallsBack(longerThanCursor: false)
+    }
+
+    private func assertPostParseReplacementFallsBack(longerThanCursor: Bool) throws {
+        let harness = try Harness.make()
+        defer { harness.tearDown() }
+
+        try harness.writeLines(
+            Harness.line(id: "seed-1", input: 1),
+            Harness.line(id: "seed-2", input: 2))
+        _ = try harness.store.loadEntries(logURL: harness.log)
+        let firstCursor = try #require(harness.store.parseCursorForTesting())
+        try harness.appendLines(Harness.line(id: "tail-1", input: 3))
+
+        let replacementLines: [String] = if longerThanCursor {
+            [
+                Harness.line(id: "new-1", input: 11),
+                Harness.line(id: "new-2", input: 12),
+                Harness.paddedLine(
+                    id: "new-pad",
+                    input: 13,
+                    padByteCount: max(64, Int(firstCursor.parsedOffset))),
+            ]
+        } else {
+            [Harness.line(id: "new-only", input: 5)]
+        }
+        let body = replacementLines.map { $0.hasSuffix("\n") ? $0 : $0 + "\n" }.joined()
+        let bodyCount = Int64(body.utf8.count)
+        if longerThanCursor {
+            #expect(bodyCount > firstCursor.parsedOffset)
+        } else {
+            #expect(bodyCount < firstCursor.parsedOffset)
+        }
+        #expect(OpenCodexUsageStore.incrementalPostParseHookInstalledForTesting() == false)
+
+        let log = harness.log
+        let loaded = try OpenCodexUsageStore.withIncrementalPostParseHookForTesting {
+            try? FileManager.default.removeItem(at: log)
+            try? Data(body.utf8).write(to: log)
+        } operation: {
+            try harness.store.loadEntries(logURL: log)
+        }
+
+        let expected = try harness.referenceEntries()
+        #expect(loaded == expected)
+        let loadedIDs = loaded.map(\.requestID)
+        #expect(Set(loadedIDs).count == loadedIDs.count)
+        #expect(Set(loadedIDs).isDisjoint(with: ["seed-1", "seed-2", "tail-1"]))
+        #expect(try harness.sqliteRequestIDs() == loadedIDs.sorted())
+
+        let cursor = try #require(harness.store.parseCursorForTesting())
+        #expect(cursor.path == harness.log.path)
+        #expect(cursor.fileIdentity != firstCursor.fileIdentity)
+        #expect(cursor.parsedOffset == bodyCount)
+
+        let recorder = OpenCodexUsageParser.LogReadRecorder()
+        let cached = try OpenCodexUsageStore.withLogReadRecorderForTesting(recorder) {
+            try harness.store.loadEntries(logURL: harness.log)
+        }
+        #expect(cached == loaded)
+        #expect(recorder.snapshot().bytesRead == 0)
+    }
 }
 
 private struct Harness {

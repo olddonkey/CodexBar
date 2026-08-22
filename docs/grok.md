@@ -126,12 +126,12 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 
 OpenCodex traffic authenticated with Grok OAuth credentials burns the same Grok
 subscription. When **Include OpenCodex usage logs** is enabled, entries carrying the
-`xai` provider prefix appear on the Grok row in **Usage & Spend**, with dollars shown
-as a public xAI list-price estimate. The Grok provider page continues to show local
-token and spend data only from the native Grok CLI's own session logs.
-
-Like the existing `openai` → Codex mapping, this attribution routes only on the
-OpenCodex provider prefix. It does not distinguish OAuth traffic from API-key traffic.
+`xai` provider prefix appear on the Grok row in **Usage & Spend** only when the
+OpenCodex `xai` provider config has `authMode: "oauth"`, with dollars shown as a public
+xAI list-price estimate. API-key traffic is deliberately left out of the Grok
+subscription row because it belongs to xAI developer-platform billing. The Grok
+provider page continues to show local token and spend data only from the native Grok
+CLI's own session logs.
 
 ## JSON-RPC contract
 

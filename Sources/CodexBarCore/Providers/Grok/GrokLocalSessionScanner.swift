@@ -311,6 +311,10 @@ public enum GrokLocalSessionScanner {
         modelsDevCacheRoot: URL?,
         requestPricingRefresh: @escaping @Sendable () async -> Void) async -> GrokLocalSessionSummary
     {
+        // This refresh is intentionally fire-and-forget, so the current scan uses whatever pricing the cache already
+        // holds. The parse cache stores parsed turns rather than prices, so every later scan reruns aggregation and
+        // pricing and will use the refreshed catalog. Plumbing completion back across the actor boundary to republish
+        // was considered and rejected as disproportionate to the one-refresh delay shared by Codex and Claude.
         Task.detached(priority: .utility) {
             await requestPricingRefresh()
         }

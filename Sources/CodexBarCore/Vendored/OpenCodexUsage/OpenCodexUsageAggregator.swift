@@ -54,6 +54,13 @@ enum OpenCodexUsageAggregator {
         var sawCost = false
     }
 
+    /// Aggregates OpenCodex usage entries into a per-window token/cost snapshot.
+    ///
+    /// Pricing context is resolved once per call and shared by every entry: `modelsDevCatalog` is the models.dev
+    /// catalog and `customPricingOverlay` the app-level custom-pricing overlay file. Callers that aggregate several
+    /// providers (see `OpenCodexUsageFanOut`) resolve both once and pass them in; when either is nil it is resolved
+    /// here once. Each windowed entry is priced exactly once and that price feeds the day, session, hour and model
+    /// accumulators, so output is identical to pricing inside each merge — without a catalog/overlay lookup per call.
     static func snapshot(
         entries: [OpenCodexUsageEntry],
         now: Date,
@@ -78,6 +85,10 @@ enum OpenCodexUsageAggregator {
                 return lhs.requestID < rhs.requestID
             }
 
+        // Resolve the pricing context once for the whole snapshot. A missing models.dev catalog becomes an EMPTY
+        // catalog on purpose: `codexCostUSD` treats a nil catalog as "resolve it yourself" and would fall back to
+        // `ModelsDevCache.load` (a stat per pricing target) for every entry, whereas an empty catalog yields the same
+        // nil lookups without any file access. Nothing is resolved when the window is empty.
         let catalog: ModelsDevCatalog
         let overlay: CostUsageCustomPricing
         if windowed.isEmpty {
@@ -93,6 +104,8 @@ enum OpenCodexUsageAggregator {
         var daysByKey: [String: DayAccumulator] = [:]
         var sessions: [String: SessionAccumulator] = [:]
         var hoursByStart: [Date: HourAccumulator] = [:]
+        // `windowed` is sorted by timestamp, so the day/hour memos hit on almost every entry; a miss only costs one
+        // Calendar interval lookup. Price once per entry and reuse it for the day, session and hour merges.
         var dayMemo = LocalDayKeyMemo()
         var hourMemo = HourStartMemo()
         for entry in windowed {
@@ -322,6 +335,11 @@ enum OpenCodexUsageAggregator {
         }
     }
 
+    /// List-price estimate for one entry. Precedence is unchanged from the per-merge pricing it replaces:
+    /// 1. `customPricing` — the snapshot's own overlay (provider-scoped rates passed by the caller);
+    /// 2. `CostUsagePricing.codexCostUSD` with the pre-resolved `customPricingOverlay` (the app-level overlay file,
+    ///    which `codexCostUSD` would otherwise re-load per call) and the pre-resolved models.dev `modelsDevCatalog`
+    ///    (otherwise `ModelsDevCache.load` per call), then the bundled/historical tables.
     private static func listPriceUSD(
         entry: OpenCodexUsageEntry,
         customPricing: CostUsageCustomPricing,
@@ -382,7 +400,9 @@ enum OpenCodexUsageAggregator {
 
 extension OpenCodexUsageAggregator {
     /// Reuses the calendar's `[start, next)` day interval while timestamps stay inside it.
-    /// Day keys still come from `CostUsageLocalDay` so DST and non-Gregorian calendars stay aligned.
+    /// Day keys still come from `CostUsageLocalDay` so DST and non-Gregorian calendars stay aligned: the key derives
+    /// y-m-d from the same Gregorian-in-timezone calendar whose `.day` interval is cached here, so the memo can never
+    /// disagree with computing the key per entry (DST days are simply 23 h / 25 h intervals).
     private struct LocalDayKeyMemo {
         var start = Date.distantPast
         var end = Date.distantPast

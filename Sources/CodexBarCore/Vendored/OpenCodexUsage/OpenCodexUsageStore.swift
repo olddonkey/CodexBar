@@ -53,28 +53,64 @@ public struct OpenCodexUsageStore: Sendable {
     }
 
     public func loadEntries(logURL: URL, fileManager: FileManager = .default) throws -> [OpenCodexUsageEntry] {
-        guard fileManager.fileExists(atPath: logURL.path) else { return [] }
-        guard let identity = Self.statLog(at: logURL) else { return [] }
-        let cursor = self.readCursor()
-        if let cursor, Self.canReuseCursor(cursor, identity: identity) {
-            if identity.size == cursor.parsedOffset {
-                if let cached = self.readCachedEntries() {
-                    return cached
-                }
-            } else {
-                return try self.incrementalReload(
+        var shouldRetryStaleWrite = true
+        while true {
+            guard fileManager.fileExists(atPath: logURL.path) else { return [] }
+            guard let identity = Self.statLog(at: logURL) else { return [] }
+            let cursor = self.readCursor()
+            if let cursor, Self.canReuseCursor(cursor, identity: identity) {
+                if identity.size == cursor.parsedOffset {
+                    if let cached = self.readCachedEntries() {
+                        return cached
+                    }
+                } else if let entries = try self.incrementalReload(
                     logURL: logURL,
                     identity: identity,
                     cursor: cursor,
                     fileManager: fileManager)
+                {
+                    return entries
+                } else if shouldRetryStaleWrite {
+                    // Another loader committed a later same-file cursor. Re-run the cursor
+                    // path once against that durable state, then fall back to a full reload.
+                    shouldRetryStaleWrite = false
+                    continue
+                } else {
+                    return try self.fullReload(
+                        logURL: logURL,
+                        identity: identity,
+                        fileManager: fileManager)
+                }
             }
+            return try self.fullReload(logURL: logURL, identity: identity, fileManager: fileManager)
         }
-        return try self.fullReload(logURL: logURL, identity: identity, fileManager: fileManager)
     }
 
-    func parseCursorForTesting() -> (parsedOffset: Int64, prefixDigest: String, fileIdentity: String)? {
+    func parseCursorForTesting() -> (
+        parsedOffset: Int64,
+        prefixDigest: String,
+        fileIdentity: String,
+        path: String)?
+    {
         guard let cursor = self.readCursor() else { return nil }
-        return (cursor.parsedOffset, cursor.prefixDigest, cursor.fileIdentity)
+        return (cursor.parsedOffset, cursor.prefixDigest, cursor.fileIdentity, cursor.path)
+    }
+
+    func writeIncrementalEntriesForTesting(
+        _ entries: [OpenCodexUsageEntry],
+        path: String,
+        fileIdentity: String,
+        parsedOffset: Int64,
+        prefixDigest: String)
+    {
+        _ = self.writeEntries(
+            entries,
+            cursor: ParseCursor(
+                path: path,
+                fileIdentity: fileIdentity,
+                parsedOffset: parsedOffset,
+                prefixDigest: prefixDigest),
+            replaceAll: false)
     }
 
     private func fullReload(
@@ -93,11 +129,12 @@ public struct OpenCodexUsageStore: Sendable {
         return entries
     }
 
+    /// Returns `nil` when the incremental write observed a newer same-file durable cursor.
     private func incrementalReload(
         logURL: URL,
         identity: LogIdentity,
         cursor: ParseCursor,
-        fileManager: FileManager) throws -> [OpenCodexUsageEntry]
+        fileManager: FileManager) throws -> [OpenCodexUsageEntry]?
     {
         guard let existing = self.readCachedEntries() else {
             return try self.fullReload(logURL: logURL, identity: identity, fileManager: fileManager)
@@ -115,13 +152,16 @@ public struct OpenCodexUsageStore: Sendable {
         let digest = nextOffset == cursor.parsedOffset
             ? cursor.prefixDigest
             : (Self.prefixDigest(fileURL: logURL, parsedOffset: nextOffset) ?? "")
-        self.insertCachedEntries(
+        if self.insertCachedEntries(
             committed,
             cursor: ParseCursor(
                 path: identity.path,
                 fileIdentity: identity.fileIdentity,
                 parsedOffset: nextOffset,
-                prefixDigest: digest))
+                prefixDigest: digest)) == .stale
+        {
+            return nil
+        }
         return Self.dedupedAndSorted(existing + committed + pending)
     }
 
@@ -176,23 +216,38 @@ public struct OpenCodexUsageStore: Sendable {
         self.writeEntries(entries, cursor: cursor, replaceAll: true)
     }
 
-    private func insertCachedEntries(_ entries: [OpenCodexUsageEntry], cursor: ParseCursor) {
+    private func insertCachedEntries(_ entries: [OpenCodexUsageEntry], cursor: ParseCursor) -> CachedWriteResult {
         self.writeEntries(entries, cursor: cursor, replaceAll: false)
     }
 
-    private func writeEntries(_ entries: [OpenCodexUsageEntry], cursor: ParseCursor, replaceAll: Bool) {
-        guard let db = self.open(readOnly: false) else { return }
+    @discardableResult
+    private func writeEntries(
+        _ entries: [OpenCodexUsageEntry],
+        cursor: ParseCursor,
+        replaceAll: Bool) -> CachedWriteResult
+    {
+        guard let db = self.open(readOnly: false) else { return .applied }
         defer { sqlite3_close(db) }
-        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else { return }
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else { return .applied }
+        // Incremental appends only (`replaceAll == false`): after BEGIN IMMEDIATE, re-read the
+        // durable cursor. A concurrent loader may already have committed a later parsedOffset
+        // for this path + fileIdentity; writing this snapshot would move the cursor backwards
+        // and re-insert rows it already stored. Full reloads re-derived the whole file and must
+        // still replace even a newer cursor (truncation, rotation, schema rebuild).
+        if !replaceAll, Self.isStaleIncrementalCursor(proposed: cursor, durable: Self.parseCursor(from: db)) {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            return .stale
+        }
         if replaceAll {
             _ = sqlite3_exec(db, "DELETE FROM entries", nil, nil, nil)
         }
         Self.setCursor(db, cursor)
         guard Self.insertEntries(db, entries) else {
             _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
-            return
+            return .applied
         }
         _ = sqlite3_exec(db, "COMMIT", nil, nil, nil)
+        return .applied
     }
 
     private func open(readOnly: Bool) -> OpaquePointer? {
@@ -221,12 +276,22 @@ public struct OpenCodexUsageStore: Sendable {
     private func readCursor() -> ParseCursor? {
         guard let db = self.open(readOnly: true) else { return nil }
         defer { sqlite3_close(db) }
-        guard Self.userVersion(db) == Self.schemaVersion,
-              let raw = Self.meta(db, key: Self.cursorMetaKey),
-              let data = raw.data(using: .utf8),
-              let cursor = try? JSONDecoder().decode(ParseCursor.self, from: data)
+        guard Self.userVersion(db) == Self.schemaVersion else { return nil }
+        return Self.parseCursor(from: db)
+    }
+
+    private static func parseCursor(from db: OpaquePointer?) -> ParseCursor? {
+        guard let raw = self.meta(db, key: cursorMetaKey),
+              let data = raw.data(using: .utf8)
         else { return nil }
-        return cursor
+        return try? JSONDecoder().decode(ParseCursor.self, from: data)
+    }
+
+    private static func isStaleIncrementalCursor(proposed: ParseCursor, durable: ParseCursor?) -> Bool {
+        guard let durable else { return false }
+        return durable.path == proposed.path
+            && durable.fileIdentity == proposed.fileIdentity
+            && durable.parsedOffset >= proposed.parsedOffset
     }
 
     /// Threat model: the digest covers only the first min(64 KiB, parsedOffset) bytes, so an
@@ -457,6 +522,11 @@ public struct OpenCodexUsageStore: Sendable {
             prefix = data
         }
         return SHA256.hash(data: prefix).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private enum CachedWriteResult: Equatable {
+        case applied
+        case stale
     }
 
     private struct ParseCursor: Equatable, Sendable, Codable {

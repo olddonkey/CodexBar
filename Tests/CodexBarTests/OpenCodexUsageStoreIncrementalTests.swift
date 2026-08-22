@@ -319,6 +319,43 @@ struct OpenCodexUsageStoreIncrementalTests {
     }
 
     @Test
+    func `stale incremental write does not regress a newer durable cursor`() throws {
+        // Deterministic: commit a newer cursor, then force the write path with the older
+        // snapshot. No thread interleaving.
+        let harness = try Harness.make()
+        defer { harness.tearDown() }
+
+        try harness.writeLines(Harness.line(id: "req-1", input: 1), Harness.line(id: "req-2", input: 2))
+        let first = try harness.store.loadEntries(logURL: harness.log)
+        let firstCursor = try #require(harness.store.parseCursorForTesting())
+
+        try harness.appendLines(Harness.line(id: "req-3", input: 3), Harness.line(id: "req-4", input: 4))
+        _ = try harness.store.loadEntries(logURL: harness.log)
+        let newerCursor = try #require(harness.store.parseCursorForTesting())
+        #expect(newerCursor.parsedOffset > firstCursor.parsedOffset)
+
+        harness.store.writeIncrementalEntriesForTesting(
+            first,
+            path: firstCursor.path,
+            fileIdentity: firstCursor.fileIdentity,
+            parsedOffset: firstCursor.parsedOffset,
+            prefixDigest: firstCursor.prefixDigest)
+
+        let afterStale = try #require(harness.store.parseCursorForTesting())
+        #expect(afterStale.parsedOffset == newerCursor.parsedOffset)
+        #expect(afterStale.prefixDigest == newerCursor.prefixDigest)
+        #expect(afterStale.fileIdentity == newerCursor.fileIdentity)
+        #expect(afterStale.path == newerCursor.path)
+
+        let expected = try harness.referenceEntries()
+        #expect(try harness.sqliteEntryCount() == expected.count)
+        #expect(try harness.sqliteRequestIDs() == expected.map(\.requestID).sorted())
+
+        let loaded = try harness.store.loadEntries(logURL: harness.log)
+        #expect(loaded == expected)
+    }
+
+    @Test
     func `incremental reload falls back to a full parse when the cached rows cannot be read`() throws {
         let harness = try Harness.make()
         defer { harness.tearDown() }
@@ -432,6 +469,22 @@ private struct Harness {
 
     var databaseURL: URL {
         self.cacheRoot.appendingPathComponent(OpenCodexUsageStore.databaseFilename)
+    }
+
+    func sqliteEntryCount() throws -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(self.databaseURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            throw FixtureError.sqlite
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM entries", -1, &statement, nil) == SQLITE_OK else {
+            throw FixtureError.sqlite
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw FixtureError.sqlite }
+        return Int(sqlite3_column_int64(statement, 0))
     }
 
     func sqliteRequestIDs() throws -> [String] {

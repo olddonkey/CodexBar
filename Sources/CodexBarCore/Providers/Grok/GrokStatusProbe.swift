@@ -123,7 +123,7 @@ public struct GrokStatusProbe: Sendable {
         }
 
         // Local fallback summary always succeeds (empty if no sessions yet).
-        let localSummary = try await GrokLocalSessionScanner.summarizeOffMainThread(
+        let localSummary = await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
             env: env,
             lookbackDays: GrokLocalSessionScanner.maximumLookbackDays)
         let cliVersion = Self.detectVersion(env: env)

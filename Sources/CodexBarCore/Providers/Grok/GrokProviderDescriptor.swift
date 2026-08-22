@@ -344,7 +344,7 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
     }
 
     var localSummary: @Sendable ([String: String]) async throws -> GrokLocalSessionSummary? = {
-        try await GrokLocalSessionScanner.summarizeOffMainThread(
+        await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
             env: $0,
             lookbackDays: GrokLocalSessionScanner.maximumLookbackDays)
     }

@@ -284,6 +284,47 @@ public enum GrokLocalSessionScanner {
     private static let parseCache = GrokLocalSessionParseCache()
     private static let turnCompletedNeedle = Data("turn_completed".utf8)
 
+    /// Request a background models.dev refresh, then scan using the currently cached catalog.
+    /// The refresh is deliberately detached so pricing availability cannot delay or fail the local scan.
+    public static func summarizeRequestingPricingRefresh(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        lookbackDays: Int = defaultLookbackDays,
+        now: Date = .init()) async -> GrokLocalSessionSummary
+    {
+        await self.summarizeRequestingPricingRefresh(
+            env: env,
+            fileManager: fileManager,
+            lookbackDays: lookbackDays,
+            now: now,
+            modelsDevCacheRoot: nil)
+        {
+            await ModelsDevPricingPipeline.refreshIfNeeded(now: now)
+        }
+    }
+
+    static func summarizeRequestingPricingRefresh(
+        env: [String: String],
+        fileManager: FileManager = .default,
+        lookbackDays: Int = defaultLookbackDays,
+        now: Date = .init(),
+        modelsDevCacheRoot: URL?,
+        requestPricingRefresh: @escaping @Sendable () async -> Void) async -> GrokLocalSessionSummary
+    {
+        Task.detached(priority: .utility) {
+            await requestPricingRefresh()
+        }
+        return self.summarize(
+            env: env,
+            fileManager: fileManager,
+            lookbackDays: lookbackDays,
+            now: now,
+            pricing: PricingContext(
+                modelsDevCatalog: nil,
+                modelsDevCacheRoot: modelsDevCacheRoot,
+                customPricing: .empty))
+    }
+
     /// Walk `~/.grok/sessions/<encoded_cwd>/<session_id>/updates.jsonl` and aggregate completed turns.
     public static func summarize(
         env: [String: String] = ProcessInfo.processInfo.environment,

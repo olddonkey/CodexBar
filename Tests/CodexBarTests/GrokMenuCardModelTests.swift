@@ -145,6 +145,151 @@ struct GrokMenuCardModelTests {
         #expect(!lines.contains(where: { $0.hasPrefix("Credits:") }))
     }
 
+    @Test
+    func `inline dashboard shows today period and local logs disclaimer`() throws {
+        let now = Date(timeIntervalSince1970: 1_700_179_200)
+        let metadata = try #require(ProviderDefaults.metadata[.grok])
+        let tokenSnapshot = CostUsageTokenSnapshot(
+            sessionTokens: 275,
+            sessionCostUSD: 0.25,
+            last30DaysTokens: 425,
+            last30DaysCostUSD: 0.37,
+            daily: [
+                CostUsageDailyReport.Entry(
+                    date: "2023-11-14",
+                    inputTokens: 100,
+                    outputTokens: 50,
+                    totalTokens: 150,
+                    costUSD: 0.12,
+                    modelsUsed: ["grok-code-fast-1"],
+                    modelBreakdowns: [
+                        CostUsageDailyReport.ModelBreakdown(
+                            modelName: "grok-code-fast-1",
+                            costUSD: 0.12,
+                            totalTokens: 150),
+                    ]),
+                CostUsageDailyReport.Entry(
+                    date: "2023-11-15",
+                    inputTokens: 200,
+                    outputTokens: 75,
+                    totalTokens: 275,
+                    costUSD: 0.25,
+                    modelsUsed: ["grok-code-fast-1"],
+                    modelBreakdowns: [
+                        CostUsageDailyReport.ModelBreakdown(
+                            modelName: "grok-code-fast-1",
+                            costUSD: 0.25,
+                            totalTokens: 275),
+                    ]),
+            ],
+            updatedAt: now)
+
+        let model = CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            UsageMenuCardView.Model.make(.init(
+                provider: .grok,
+                metadata: metadata,
+                snapshot: UsageSnapshot(
+                    primary: RateWindow(
+                        usedPercent: 10,
+                        windowMinutes: 7 * 24 * 60,
+                        resetsAt: now.addingTimeInterval(3 * 24 * 60 * 60),
+                        resetDescription: nil),
+                    secondary: nil,
+                    updatedAt: now),
+                credits: nil,
+                creditsError: nil,
+                dashboard: nil,
+                dashboardError: nil,
+                tokenSnapshot: tokenSnapshot,
+                tokenError: nil,
+                account: AccountInfo(email: nil, plan: nil),
+                isRefreshing: false,
+                lastError: nil,
+                usageBarsShowUsed: false,
+                resetTimeDisplayStyle: .countdown,
+                tokenCostUsageEnabled: true,
+                costSummaryInlineEnabled: true,
+                showOptionalCreditsAndExtraUsage: true,
+                hidePersonalInfo: false,
+                now: now))
+        }
+
+        let dashboard = try #require(model.inlineUsageDashboard)
+        #expect(dashboard.kpis.first { $0.title == "Today" }?.value == "$0.25")
+        #expect(dashboard.kpis.first { $0.title == "30d cost" }?.value == "$0.37")
+        #expect(dashboard.detailLines.contains("Estimated from local Grok CLI logs · not a subscription bill"))
+    }
+
+    @Test
+    func `global cost summary style can disable inline dashboard`() throws {
+        let now = Date(timeIntervalSince1970: 1_700_179_200)
+        let metadata = try #require(ProviderDefaults.metadata[.grok])
+        let tokenSnapshot = CostUsageTokenSnapshot(
+            sessionTokens: 275,
+            sessionCostUSD: 0.25,
+            last30DaysTokens: 425,
+            last30DaysCostUSD: 0.37,
+            daily: [
+                CostUsageDailyReport.Entry(
+                    date: "2023-11-14",
+                    inputTokens: 100,
+                    outputTokens: 50,
+                    totalTokens: 150,
+                    costUSD: 0.12,
+                    modelsUsed: ["grok-code-fast-1"],
+                    modelBreakdowns: [
+                        CostUsageDailyReport.ModelBreakdown(
+                            modelName: "grok-code-fast-1",
+                            costUSD: 0.12,
+                            totalTokens: 150),
+                    ]),
+                CostUsageDailyReport.Entry(
+                    date: "2023-11-15",
+                    inputTokens: 200,
+                    outputTokens: 75,
+                    totalTokens: 275,
+                    costUSD: 0.25,
+                    modelsUsed: ["grok-code-fast-1"],
+                    modelBreakdowns: [
+                        CostUsageDailyReport.ModelBreakdown(
+                            modelName: "grok-code-fast-1",
+                            costUSD: 0.25,
+                            totalTokens: 275),
+                    ]),
+            ],
+            updatedAt: now)
+
+        let model = UsageMenuCardView.Model.make(.init(
+            provider: .grok,
+            metadata: metadata,
+            snapshot: UsageSnapshot(
+                primary: RateWindow(
+                    usedPercent: 10,
+                    windowMinutes: 7 * 24 * 60,
+                    resetsAt: now.addingTimeInterval(3 * 24 * 60 * 60),
+                    resetDescription: nil),
+                secondary: nil,
+                updatedAt: now),
+            credits: nil,
+            creditsError: nil,
+            dashboard: nil,
+            dashboardError: nil,
+            tokenSnapshot: tokenSnapshot,
+            tokenError: nil,
+            account: AccountInfo(email: nil, plan: nil),
+            isRefreshing: false,
+            lastError: nil,
+            usageBarsShowUsed: false,
+            resetTimeDisplayStyle: .countdown,
+            tokenCostUsageEnabled: true,
+            costSummaryInlineEnabled: false,
+            showOptionalCreditsAndExtraUsage: true,
+            hidePersonalInfo: false,
+            now: now))
+
+        #expect(model.inlineUsageDashboard == nil)
+    }
+
     private static func model(now: Date, window: RateWindow) throws -> UsageMenuCardView.Model {
         let metadata = try #require(ProviderDefaults.metadata[.grok])
         let snapshot = UsageSnapshot(

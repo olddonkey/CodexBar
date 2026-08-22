@@ -812,6 +812,8 @@
 /* Cost estimation */
 "cost_estimate_hint" = "Diperkirakan dari log lokal · mungkin berbeda dari tagihan Anda";
 "codex_api_estimate_hint" = "Diperkirakan dari penggunaan token · bukan tagihan langganan";
+"grok_local_logs_hint" = "Diperkirakan dari log Grok CLI lokal · bukan tagihan langganan";
+"On-demand" = "Sesuai permintaan";
 "cost_data_explanation" = "Biaya dapat dilaporkan oleh penyedia atau diperkirakan dari penggunaan token dengan harga API publik. Estimasi bukan biaya langganan.";
 "No JetBrains IDE with AI Assistant detected. Install a JetBrains IDE and enable AI Assistant." = "Tidak ada JetBrains IDE dengan AI Assistant terdeteksi. Pasang JetBrains IDE dan aktifkan AI Assistant.";
 "OpenRouter API token not configured. Set OPENROUTER_API_KEY environment variable or configure in Settings." = "Token API OpenRouter belum dikonfigurasi. Atur variabel lingkungan OPENROUTER_API_KEY atau konfigurasi di Pengaturan.";

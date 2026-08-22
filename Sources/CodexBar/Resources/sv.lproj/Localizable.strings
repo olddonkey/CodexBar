@@ -803,6 +803,8 @@
 /* Cost estimation */
 "cost_estimate_hint" = "Uppskattat från lokala loggar · kan skilja sig från din faktura";
 "codex_api_estimate_hint" = "Uppskattat från tokenanvändning · inte en prenumerationsfaktura";
+"grok_local_logs_hint" = "Uppskattat från lokala Grok CLI-loggar · inte en prenumerationsfaktura";
+"On-demand" = "På begäran";
 "cost_data_explanation" = "Kostnader kan rapporteras av leverantören eller uppskattas från tokenanvändning med offentliga API-priser. Uppskattningar är inte prenumerationsavgifter.";
 "No JetBrains IDE with AI Assistant detected. Install a JetBrains IDE and enable AI Assistant." = "Ingen JetBrains IDE med AI Assistant hittades. Installera en JetBrains IDE och aktivera AI Assistant.";
 "OpenRouter API token not configured. Set OPENROUTER_API_KEY environment variable or configure in Settings." = "OpenRouter-API-token är inte konfigurerad. Ange miljövariabeln OPENROUTER_API_KEY eller konfigurera i Inställningar.";

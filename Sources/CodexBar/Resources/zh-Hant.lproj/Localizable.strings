@@ -789,6 +789,8 @@
 "macOS Tahoe can block menu bar apps in System Settings → Menu Bar → Allow in the Menu Bar. CodexBar is running, but macOS may be hiding its icon. Open Menu Bar settings and turn CodexBar on." = "macOS Tahoe 可能會在「系統設定」→「選單列」→「允許顯示在選單列」中封鎖選單列 App。CodexBar 正在執行，但 macOS 可能隱藏了它的圖示。請開啟選單列設定並啟用 CodexBar。";
 "cost_estimate_hint" = "根據本機記錄估算 · 可能與帳單不同";
 "codex_api_estimate_hint" = "根據 Token 用量估算 · 不是訂閱帳單";
+"grok_local_logs_hint" = "根據本機 Grok CLI 日誌估算 · 不是訂閱帳單";
+"On-demand" = "隨選";
 "cost_data_explanation" = "費用可能由供應商回報，也可能根據 Token 用量按公開 API 價格估算。估算值不是訂閱費用。";
 "copilot_device_code" = "裝置碼已複製到剪貼簿：%1$@\n\n請到以下網址驗證：%2$@";
 "copilot_waiting_text" = "請在瀏覽器中完成登入。\n登入完成後，此視窗會自動關閉。";

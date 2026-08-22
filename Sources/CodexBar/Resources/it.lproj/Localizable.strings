@@ -812,6 +812,8 @@
 /* Cost estimation */
 "cost_estimate_hint" = "Stimato dai log locali · può differire dalla fattura";
 "codex_api_estimate_hint" = "Stimato dall’utilizzo dei token · non è una fattura di abbonamento";
+"grok_local_logs_hint" = "Stimato dai log locali di Grok CLI · non è una fattura di abbonamento";
+"On-demand" = "Su richiesta";
 "cost_data_explanation" = "I costi possono essere comunicati dal fornitore o stimati dall’utilizzo dei token ai prezzi API pubblici. Le stime non sono addebiti di abbonamento.";
 "No JetBrains IDE with AI Assistant detected. Install a JetBrains IDE and enable AI Assistant." = "Nessun IDE JetBrains con AI Assistant rilevato. Installa un IDE JetBrains e abilita AI Assistant.";
 "OpenRouter API token not configured. Set OPENROUTER_API_KEY environment variable or configure in Settings." = "Token API OpenRouter non configurato. Imposta la variabile d'ambiente OPENROUTER_API_KEY oppure configuralo nelle Impostazioni.";

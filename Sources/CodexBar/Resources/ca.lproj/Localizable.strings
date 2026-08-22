@@ -788,6 +788,8 @@
 /* Cost estimation */
 "cost_estimate_hint" = "Estimat a partir de registres locals · pot diferir de la vostra factura";
 "codex_api_estimate_hint" = "Estimat a partir de l’ús de tokens · no és una factura de subscripció";
+"grok_local_logs_hint" = "Estimat a partir dels registres locals del Grok CLI · no és una factura de subscripció";
+"On-demand" = "Sota demanda";
 "cost_data_explanation" = "Els costos poden ser comunicats pel proveïdor o estimats a partir de l’ús de tokens amb preus públics de l’API. Les estimacions no són càrrecs de subscripció.";
 
 /* Popup panels */

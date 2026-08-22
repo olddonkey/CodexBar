@@ -89,7 +89,10 @@ public enum GrokProviderDescriptor {
                 noDataMessage: {
                     "Grok totals come from local Grok CLI session logs. "
                         + "Costs are public list-price estimates, not a bill."
-                }),
+                },
+                menuHintLines: [.localized("grok_local_logs_hint")],
+                showsHintInProviderDetails: true,
+                chartEstimateDisclaimer: .localized("grok_local_logs_hint")),
             pace: ProviderPaceCapability(
                 resetWindowPace: .custom { window, now in
                     guard Self.primaryLabel(window: window, now: now) == "Weekly",
@@ -101,13 +104,15 @@ public enum GrokProviderDescriptor {
                         && timeUntilReset > 0
                         && timeUntilReset <= TimeInterval(windowMinutes) * 60
                 }),
-            presentation: ProviderUsagePresentation(rateWindowLabeler: { metadata, snapshot, now in
-                ProviderRateWindowLabels(
-                    primary: Self.displayLabel(window: snapshot.primary, now: now) ?? metadata.sessionLabel,
-                    secondary: metadata.weeklyLabel,
-                    tertiary: metadata.opusLabel ?? "Sonnet",
-                    showsTertiary: metadata.supportsOpus)
-            }),
+            presentation: ProviderUsagePresentation(
+                rateWindowLabeler: { metadata, snapshot, now in
+                    ProviderRateWindowLabels(
+                        primary: Self.displayLabel(window: snapshot.primary, now: now) ?? metadata.sessionLabel,
+                        secondary: metadata.weeklyLabel,
+                        tertiary: metadata.opusLabel ?? "Sonnet",
+                        showsTertiary: metadata.supportsOpus)
+                },
+                menuCard: ProviderMenuCardPresentation(supportsInlineTokenCostDashboard: true)),
             fetchPlan: ProviderFetchPlan(
                 sourceModes: [.auto, .cli, .oauth, .web],
                 pipeline: ProviderFetchPipeline(resolveStrategies: self.resolveStrategies)),

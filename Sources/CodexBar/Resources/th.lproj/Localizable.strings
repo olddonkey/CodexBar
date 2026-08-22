@@ -810,6 +810,8 @@
 /* Cost estimation */
 "cost_estimate_hint" = "ประมาณการจากบันทึกท้องถิ่น · อาจแตกต่างจากใบเรียกเก็บเงินของคุณ";
 "codex_api_estimate_hint" = "ประมาณจากการใช้โทเค็น · ไม่ใช่ใบเรียกเก็บค่าสมัครสมาชิก";
+"grok_local_logs_hint" = "ประมาณจากบันทึก Grok CLI ในเครื่อง · ไม่ใช่ใบเรียกเก็บค่าสมัครสมาชิก";
+"On-demand" = "ตามคำขอ";
 "cost_data_explanation" = "ค่าใช้จ่ายอาจรายงานโดยผู้ให้บริการหรือประมาณจากการใช้โทเค็นตามราคา API สาธารณะ ค่าประมาณไม่ใช่ค่าบริการสมาชิก";
 "No JetBrains IDE with AI Assistant detected. Install a JetBrains IDE and enable AI Assistant." = "ตรวจไม่พบ JetBrains IDE ที่มี AI Assistant ติดตั้ง JetBrains IDE และเปิดใช้งาน AI Assistant";
 "OpenRouter API token not configured. Set OPENROUTER_API_KEY environment variable or configure in Settings." = "โทเค็น OpenRouter API ไม่ได้กําหนดค่า ตั้งค่าตัวแปรสภาพแวดล้อม OPENROUTER_API_KEY หรือกําหนดค่าในการตั้งค่า";

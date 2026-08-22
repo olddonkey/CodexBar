@@ -810,6 +810,8 @@
 /* Cost estimation */
 "cost_estimate_hint" = "برآورد شده از چوب های محلی · ممکن است با صورتحساب شما متفاوت باشد";
 "codex_api_estimate_hint" = "برآوردشده از مصرف توکن · صورتحساب اشتراک نیست";
+"grok_local_logs_hint" = "برآوردشده از گزارش‌های محلی Grok CLI · صورتحساب اشتراک نیست";
+"On-demand" = "برحسب تقاضا";
 "cost_data_explanation" = "هزینه‌ها ممکن است توسط ارائه‌دهنده گزارش شوند یا بر اساس مصرف توکن و قیمت‌های عمومی API برآورد شوند. برآوردها هزینه اشتراک نیستند.";
 "No JetBrains IDE with AI Assistant detected. Install a JetBrains IDE and enable AI Assistant." = "هیچ JetBrains IDE ای با AI Assistant شناسایی نشد. یک JetBrains IDE نصب کنید و AI Assistant را فعال کنید.";
 "OpenRouter API token not configured. Set OPENROUTER_API_KEY environment variable or configure in Settings." = "OpenRouter API توکن پیکربندی نشده است. متغیر محیطی OPENROUTER_API_KEY تنظیم کنید یا در تنظیمات پیکربندی کنید.";

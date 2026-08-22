@@ -363,7 +363,7 @@ struct LocalizationLanguageCatalogTests {
     }
 
     @Test
-    func `localized catalogs include every app language label`() throws {
+    func `localized catalogs include required shared keys`() throws {
         #expect(self.languageKeys.count == AppLanguage.allCases.count)
 
         let root = URL(fileURLWithPath: #filePath)
@@ -376,11 +376,16 @@ struct LocalizationLanguageCatalogTests {
             includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "lproj" }
 
+        let requiredKeys = self.languageKeys + [
+            "grok_local_logs_hint",
+            "On-demand",
+        ]
+
         for catalogURL in catalogs {
             let stringsURL = catalogURL.appendingPathComponent("Localizable.strings")
-            let contents = try String(contentsOf: stringsURL, encoding: .utf8)
-            for key in self.languageKeys {
-                #expect(contents.contains("\"\(key)\""), "Missing \(key) in \(catalogURL.lastPathComponent)")
+            let catalog = try #require(NSDictionary(contentsOf: stringsURL) as? [String: String])
+            for key in requiredKeys {
+                #expect(catalog[key]?.isEmpty == false, "Missing \(key) in \(catalogURL.lastPathComponent)")
             }
         }
     }

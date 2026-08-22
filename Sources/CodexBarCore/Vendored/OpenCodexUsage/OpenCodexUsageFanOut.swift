@@ -18,13 +18,18 @@ public enum OpenCodexUsageFanOut {
             }
             grouped[provider, default: []].append(entry)
         }
+        guard !grouped.isEmpty else { return [:] }
+        let catalog = CostUsagePricing.modelsDevCatalog() ?? ModelsDevCatalog(providers: [:])
+        let overlay = CostUsagePricing.customPricingOverlay()
         return grouped.mapValues { providerEntries in
             OpenCodexUsageAggregator.snapshot(
                 entries: providerEntries,
                 now: now,
                 historyDays: historyDays,
                 calendar: calendar,
-                customPricing: customPricing)
+                customPricing: customPricing,
+                modelsDevCatalog: catalog,
+                customPricingOverlay: overlay)
         }
     }
 

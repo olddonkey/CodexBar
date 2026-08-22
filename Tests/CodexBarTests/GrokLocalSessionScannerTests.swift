@@ -132,6 +132,46 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
     }
 
     @Test
+    func `absent models dev cache requests a background refresh`() async throws {
+        let cacheRoot = try self.makeModelsDevCacheRoot()
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+
+        await self.expectPricingRefreshRequests(
+            cacheRoot: cacheRoot,
+            now: Date(timeIntervalSince1970: 100_000),
+            expectedRequests: 1)
+    }
+
+    @Test
+    func `stale models dev cache requests a background refresh`() async throws {
+        let cacheRoot = try self.makeModelsDevCacheRoot()
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let now = Date(timeIntervalSince1970: 100_000)
+        try ModelsDevCache.save(
+            catalog: Self.catalog(),
+            fetchedAt: now.addingTimeInterval(-ModelsDevCache.ttlSeconds - 1),
+            cacheRoot: cacheRoot)
+
+        await self.expectPricingRefreshRequests(
+            cacheRoot: cacheRoot,
+            now: now,
+            expectedRequests: 1)
+    }
+
+    @Test
+    func `fresh models dev cache skips the background refresh`() async throws {
+        let cacheRoot = try self.makeModelsDevCacheRoot()
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let now = Date(timeIntervalSince1970: 100_000)
+        try ModelsDevCache.save(catalog: Self.catalog(), fetchedAt: now, cacheRoot: cacheRoot)
+
+        await self.expectPricingRefreshRequests(
+            cacheRoot: cacheRoot,
+            now: now,
+            expectedRequests: 0)
+    }
+
+    @Test
     func `parse cache decodes unchanged files once and invalidates on file identity`() throws {
         GrokLocalSessionScanner.resetParseCacheForTesting()
         defer { GrokLocalSessionScanner.resetParseCacheForTesting() }
@@ -437,4 +477,73 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         #expect(snapshot.sessionCostUSD == 0.25)
         #expect(snapshot.updatedAt == localScanTime)
     }
+
+    private func makeModelsDevCacheRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grok-modelsdev-refresh-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func expectPricingRefreshRequests(
+        cacheRoot: URL,
+        now: Date,
+        expectedRequests: Int) async
+    {
+        let transport = GrokModelsDevTrackingTransport()
+        let completion = GrokPricingRefreshCompletion()
+        let summary = await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
+            env: ["GROK_HOME": cacheRoot.path],
+            lookbackDays: 7,
+            now: now,
+            modelsDevCacheRoot: cacheRoot)
+        {
+            await ModelsDevPricingPipeline.refreshIfNeeded(
+                now: now,
+                cacheRoot: cacheRoot,
+                client: ModelsDevClient(transport: transport))
+            await completion.finish()
+        }
+        await completion.waitUntilFinished()
+
+        #expect(summary.daily.isEmpty)
+        #expect(transport.calls == expectedRequests)
+    }
+}
+
+private actor GrokPricingRefreshCompletion {
+    private var finished = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func finish() {
+        self.finished = true
+        let waiters = self.waiters
+        self.waiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilFinished() async {
+        if self.finished { return }
+        await withCheckedContinuation { continuation in
+            self.waiters.append(continuation)
+        }
+    }
+}
+
+private final class GrokModelsDevTrackingTransport: ModelsDevHTTPTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var callCount = 0
+
+    var calls: Int {
+        self.lock.withLock { self.callCount }
+    }
+
+    func data(for _: URLRequest) async throws -> (Data, URLResponse) {
+        self.lock.withLock { self.callCount += 1 }
+        throw GrokModelsDevTrackingError.failed
+    }
+}
+
+private enum GrokModelsDevTrackingError: Error {
+    case failed
 }

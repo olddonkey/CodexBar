@@ -510,7 +510,7 @@ extension UsageStore {
                 snapshot = await scannerOverride(GrokLocalSessionScanner.maximumLookbackDays)
             } else {
                 let scanTask = Task.detached(priority: .utility) {
-                    GrokLocalSessionScanner.summarize(
+                    await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
                         env: environment,
                         lookbackDays: GrokLocalSessionScanner.maximumLookbackDays)
                         .toCostUsageTokenSnapshot(historyDays: GrokLocalSessionScanner.maximumLookbackDays)

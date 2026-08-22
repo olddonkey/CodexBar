@@ -334,11 +334,12 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
                 throw GrokWebBillingError.teamUsageUnsupported
             }
             let subscriptionTier = try await resolveSettingsTier(authState)
+            let localSummary = await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
+                env: context.env,
+                lookbackDays: GrokLocalSessionScanner.maximumLookbackDays)
             let identitySnapshot = GrokStatusProbe.identityOnlySnapshot(
                 credentials: authState,
-                localSummary: GrokLocalSessionScanner.summarize(
-                    env: context.env,
-                    lookbackDays: GrokLocalSessionScanner.maximumLookbackDays),
+                localSummary: localSummary,
                 cliVersion: GrokStatusProbe.detectVersion(env: context.env),
                 subscriptionTier: subscriptionTier)
             return self.makeResult(
@@ -358,6 +359,9 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
                 nil
             }
         let enrichedBilling = webBilling.applying(subscriptionTier: subscriptionTier)
+        let localSummary = await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
+            env: context.env,
+            lookbackDays: GrokLocalSessionScanner.maximumLookbackDays)
         let snapshot = GrokUsageSnapshot(
             billing: nil,
             webBilling: enrichedBilling,
@@ -365,9 +369,7 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
                 credentials: credentials,
                 billing: nil,
                 webBilling: enrichedBilling),
-            localSummary: GrokLocalSessionScanner.summarize(
-                env: context.env,
-                lookbackDays: GrokLocalSessionScanner.maximumLookbackDays),
+            localSummary: localSummary,
             cliVersion: GrokStatusProbe.detectVersion(env: context.env),
             updatedAt: Date(),
             subscriptionTier: subscriptionTier ?? enrichedBilling.subscriptionTier)

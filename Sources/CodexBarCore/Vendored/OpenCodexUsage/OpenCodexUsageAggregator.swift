@@ -368,8 +368,9 @@ enum OpenCodexUsageAggregator {
         {
             return overlay
         }
+        let pricingModel = entry.model.contains("/") ? entry.model : "\(entry.provider)/\(entry.model)"
         return CostUsagePricing.codexCostUSD(
-            model: entry.model,
+            model: pricingModel,
             inputTokens: input,
             cachedInputTokens: cacheRead,
             outputTokens: output,

@@ -5,10 +5,15 @@ import Testing
 struct OpenCodexRouteDispatcherTests {
     @Test(arguments: [
         ("openai", OpenCodexRouteTarget.subscription(.codex)),
+        ("xai", OpenCodexRouteTarget.subscription(.grok)),
+        ("  XAI\n", OpenCodexRouteTarget.subscription(.grok)),
         ("opencode-go", OpenCodexRouteTarget.subscription(.opencodego)),
         ("kimi-coding", OpenCodexRouteTarget.subscription(.kimi)),
         ("deepseek", OpenCodexRouteTarget.subscription(.deepseek)),
         ("opencode-free", OpenCodexRouteTarget.tokenOnly),
+        ("kimi", OpenCodexRouteTarget.unknown),
+        ("anthropic", OpenCodexRouteTarget.unknown),
+        ("unknown", OpenCodexRouteTarget.unknown),
         ("unknown-vendor", OpenCodexRouteTarget.unknown),
     ])
     func `provider routes to the expected subscription target`(
@@ -41,5 +46,15 @@ struct OpenCodexRouteDispatcherTests {
             OpenCodexRouteDispatcher.route(
                 provider: "opencode-go",
                 modelName: "gpt-5.2") == .subscription(.opencodego))
+    }
+
+    @Test
+    func `explicit xai model prefix routes to Grok`() {
+        #expect(
+            OpenCodexRouteDispatcher.route(modelName: "xai/grok-4.6") == .subscription(.grok))
+        #expect(
+            OpenCodexRouteDispatcher.route(
+                provider: "openai",
+                modelName: "  xai/grok-4.6  ") == .subscription(.grok))
     }
 }

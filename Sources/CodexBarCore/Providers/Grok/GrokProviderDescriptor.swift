@@ -87,8 +87,8 @@ public enum GrokProviderDescriptor {
             tokenCost: ProviderTokenCostConfig(
                 supportsTokenCost: true,
                 noDataMessage: {
-                    "Grok token totals come from local ~/.grok/sessions logs. "
-                        + "Subscription credits are not converted to dollars."
+                    "Grok totals come from local Grok CLI session logs. "
+                        + "Costs are public list-price estimates, not a bill."
                 }),
             pace: ProviderPaceCapability(
                 resetWindowPace: .custom { window, now in
@@ -336,7 +336,9 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
             let subscriptionTier = try await resolveSettingsTier(authState)
             let identitySnapshot = GrokStatusProbe.identityOnlySnapshot(
                 credentials: authState,
-                localSummary: GrokLocalSessionScanner.summarize(env: context.env),
+                localSummary: GrokLocalSessionScanner.summarize(
+                    env: context.env,
+                    lookbackDays: GrokLocalSessionScanner.maximumLookbackDays),
                 cliVersion: GrokStatusProbe.detectVersion(env: context.env),
                 subscriptionTier: subscriptionTier)
             return self.makeResult(
@@ -363,7 +365,9 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
                 credentials: credentials,
                 billing: nil,
                 webBilling: enrichedBilling),
-            localSummary: GrokLocalSessionScanner.summarize(env: context.env),
+            localSummary: GrokLocalSessionScanner.summarize(
+                env: context.env,
+                lookbackDays: GrokLocalSessionScanner.maximumLookbackDays),
             cliVersion: GrokStatusProbe.detectVersion(env: context.env),
             updatedAt: Date(),
             subscriptionTier: subscriptionTier ?? enrichedBilling.subscriptionTier)

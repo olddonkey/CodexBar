@@ -437,6 +437,11 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         #expect(fallbackScanCount == 0)
         #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
 
+        await store.refreshProvider(.grok)
+
+        #expect(fallbackScanCount == 0)
+        #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
+
         store._test_grokLocalTokenScannerOverride = nil
         try FileManager.default.removeItem(at: updates)
         store.clearTokenSnapshot(for: .grok)

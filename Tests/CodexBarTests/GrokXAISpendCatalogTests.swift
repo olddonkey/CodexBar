@@ -10,6 +10,8 @@ struct GrokXAISpendCatalogTests {
         #expect(UsageStore.tokenCostRequiresProviderSnapshot(.xai))
         #expect(ProviderDescriptorRegistry.descriptor(for: .grok).tokenCost.supportsTokenCost)
         #expect(ProviderDescriptorRegistry.descriptor(for: .xai).tokenCost.supportsTokenCost)
+        #expect(ProviderDescriptorRegistry.descriptor(for: .grok).tokenCost.noDataMessage() ==
+            "Grok totals come from local Grok CLI session logs. Costs are public list-price estimates, not a bill.")
     }
 
     @Test(.enabled(

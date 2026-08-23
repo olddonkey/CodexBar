@@ -732,7 +732,7 @@ public enum GrokLocalSessionScanner {
                         historyCoverageIsEstablished = false
                         return
                     }
-                    guard let turn = autoreleasepool(invoking: { self.decodeTurn(line.bytes) }) else { return }
+                    guard let turn = self.decodeTurnWithScopedAutoreleasePool(line.bytes) else { return }
                     turns.append(turn)
                     if turns.count > compactionThreshold {
                         turns.removeFirst(limits.maximumTurnsPerFile)
@@ -754,6 +754,14 @@ public enum GrokLocalSessionScanner {
                 historyCoverageIsEstablished: historyCoverageIsEstablished && !droppedTurns),
             jsonDecodeCount: jsonDecodeCount,
             cacheable: cacheable)
+    }
+
+    private static func decodeTurnWithScopedAutoreleasePool(_ data: Data) -> GrokParsedTurn? {
+        #if canImport(Darwin)
+        autoreleasepool { self.decodeTurn(data) }
+        #else
+        self.decodeTurn(data)
+        #endif
     }
 
     private static func decodeTurn(_ data: Data) -> GrokParsedTurn? {

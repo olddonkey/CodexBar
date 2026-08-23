@@ -284,8 +284,9 @@ public enum GrokLocalSessionScanner {
     private static let parseCache = GrokLocalSessionParseCache()
     private static let turnCompletedNeedle = Data("turn_completed".utf8)
 
-    /// Request a background models.dev refresh, then scan using the currently cached catalog.
-    /// The refresh is deliberately detached so pricing availability cannot delay or fail the local scan.
+    /// Request a models.dev refresh, then scan using the best catalog available.
+    /// A stale catalog keeps pricing the scan while it refreshes in the background. With no catalog at all, the first
+    /// scan waits for the initial attempt so a successful refresh is reflected in the snapshot that callers publish.
     public static func summarizeRequestingPricingRefresh(
         env: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
@@ -311,11 +312,12 @@ public enum GrokLocalSessionScanner {
         modelsDevCacheRoot: URL?,
         requestPricingRefresh: @escaping @Sendable () async -> Void) async -> GrokLocalSessionSummary
     {
-        // This refresh is intentionally fire-and-forget, so the current scan uses whatever pricing the cache already
-        // holds. The parse cache stores parsed turns rather than prices, so every later scan reruns aggregation and
-        // pricing and will use the refreshed catalog. Plumbing completion back across the actor boundary to republish
-        // was considered and rejected as disproportionate to the one-refresh delay shared by Codex and Claude.
-        Task.detached(priority: .utility) {
+        let hasCachedCatalog = ModelsDevCache.load(now: now, cacheRoot: modelsDevCacheRoot).artifact != nil
+        if hasCachedCatalog {
+            Task.detached(priority: .utility) {
+                await requestPricingRefresh()
+            }
+        } else {
             await requestPricingRefresh()
         }
         return self.summarize(

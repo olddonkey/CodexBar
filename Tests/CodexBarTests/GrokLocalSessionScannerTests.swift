@@ -132,7 +132,7 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
     }
 
     @Test
-    func `absent models dev cache requests a background refresh`() async throws {
+    func `absent models dev cache requests an initial refresh`() async throws {
         let cacheRoot = try self.makeModelsDevCacheRoot()
         defer { try? FileManager.default.removeItem(at: cacheRoot) }
 
@@ -140,6 +140,36 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
             cacheRoot: cacheRoot,
             now: Date(timeIntervalSince1970: 100_000),
             expectedRequests: 1)
+    }
+
+    @Test
+    func `successful initial catalog refresh prices the first summary`() async throws {
+        let fixture = try self.makeFixture()
+        let cacheRoot = try self.makeModelsDevCacheRoot()
+        defer {
+            try? FileManager.default.removeItem(at: fixture.root)
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        let turnAt = try self.localDate(day: 20, hour: 16, minute: 45)
+        let now = turnAt.addingTimeInterval(120)
+        try self.writeUpdates(
+            [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 100, output: 10))],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: turnAt.addingTimeInterval(60))
+        let catalog = try Self.catalog()
+
+        let summary = await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: 7,
+            now: now,
+            modelsDevCacheRoot: cacheRoot)
+        {
+            _ = ModelsDevCache.save(catalog: catalog, fetchedAt: now, cacheRoot: cacheRoot)
+        }
+
+        #expect(summary.totalTokens == 110)
+        #expect(summary.daily.first?.costUSD != nil)
+        #expect(summary.daily.first?.unpricedRequestCount == 0)
     }
 
     @Test

@@ -29,7 +29,7 @@ struct OpenCodexUsageFanOutTests {
         #expect(snapshots[.codex]?.last30DaysTokens == 150)
     }
 
-    @Test func `snapshotsBySubscription keeps OAuth xai and openai tokens on their subscription rows`() throws {
+    @Test func `snapshotsBySubscription never reclassifies xai history from current auth state`() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
         let now = Date(timeIntervalSince1970: 1_787_270_400)
@@ -43,41 +43,15 @@ struct OpenCodexUsageFanOutTests {
                 usage: OpenCodexTokenUsage(inputTokens: 30, outputTokens: 10, totalTokens: 40),
                 totalTokens: 40),
         ]
-        let oauthBackedProviderIDs = try Self.oauthBackedProviderIDs(authMode: "oauth")
-        let pricing = CostUsageCustomPricing(
-            entries: ["xai/grok-4.6": .init(input: 2, output: 6)],
-            fingerprint: "xai-oauth-test")
-
         let snapshots = OpenCodexUsageFanOut.snapshotsBySubscription(
             entries: entries,
             now: now,
             historyDays: 7,
-            calendar: calendar,
-            oauthBackedProviderIDs: oauthBackedProviderIDs,
-            customPricing: pricing)
+            calendar: calendar)
 
-        #expect(Set(snapshots.keys) == [.codex, .grok])
-        #expect(snapshots[.grok]?.last30DaysTokens == 200)
-        let grokCost = try #require(snapshots[.grok]?.last30DaysCostUSD)
-        #expect(abs(grokCost - 0.00056) < 0.000000000001)
-        #expect(snapshots[.codex]?.last30DaysTokens == 40)
-    }
-
-    @Test func `snapshotsBySubscription leaves API key xai entries off the Grok row`() throws {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
-        let now = Date(timeIntervalSince1970: 1_787_270_400)
-        let oauthBackedProviderIDs = try Self.oauthBackedProviderIDs(authMode: "apiKey")
-
-        let snapshots = OpenCodexUsageFanOut.snapshotsBySubscription(
-            entries: Self.xaiEntries(now: now),
-            now: now,
-            historyDays: 7,
-            calendar: calendar,
-            oauthBackedProviderIDs: oauthBackedProviderIDs)
-
+        #expect(Set(snapshots.keys) == [.codex])
         #expect(snapshots[.grok] == nil)
-        #expect(snapshots.isEmpty)
+        #expect(snapshots[.codex]?.last30DaysTokens == 40)
     }
 
     @Test func `bare xai model prices from the injected xai catalog`() throws {
@@ -973,25 +947,6 @@ private enum OpenCodexUsageSnapshotReference {
                 usage: OpenCodexTokenUsage(inputTokens: 60, outputTokens: 20, totalTokens: 80),
                 totalTokens: 80),
         ]
-    }
-
-    private static func oauthBackedProviderIDs(authMode: String) throws -> Set<String> {
-        let fileManager = FileManager.default
-        let home = fileManager.temporaryDirectory
-            .appendingPathComponent("OpenCodexUsageFanOutTests-\(UUID().uuidString)", isDirectory: true)
-        let openCodexHome = home.appendingPathComponent(".opencodex", isDirectory: true)
-        try fileManager.createDirectory(at: openCodexHome, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: home) }
-        try """
-        { "providers": { "xai": { "authMode": "\(authMode)" } } }
-        """.write(
-            to: openCodexHome.appendingPathComponent("config.json", isDirectory: false),
-            atomically: true,
-            encoding: .utf8)
-
-        return OpenCodexUsageLog.oauthBackedProviderIDs(
-            environment: ["OPENCODEX_HOME": openCodexHome.path],
-            homeDirectory: home)
     }
 
     private static func pricingCatalog() throws -> ModelsDevCatalog {

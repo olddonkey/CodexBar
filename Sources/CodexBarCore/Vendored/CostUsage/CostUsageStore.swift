@@ -99,12 +99,12 @@ actor CostUsageStore {
         "dd19ffa2dcfa8d47", // Current main before report-window scoping; persisted rows unchanged.
         "8050a4faf4fddb96", // PR base before retained-report persistence; parsed rows unchanged.
         "cfd84d13ad7d4cfa", // 0.55.x scan scheduling and progress bookkeeping; persisted rows unchanged.
+        "3c984b655688593f", // xAI pricing and row-ownership evidence only; persisted Codex rows unchanged.
         "98da5914d2f6a9cd", // Pushed PR producer before retry signaling; persisted rows unchanged.
         "43609cc56f76a003", // 0.49.3 request-tier pricing; persisted row shape unchanged.
         "b975eb705f905b9a", // 0.49.0-0.49.2 SQLite producer with compatible rows.
         "47144baa8daccf52", // This branch changes only scan scheduling, discovery, and persistence bookkeeping.
         "2d17f4981b78d07f", // Persisted priority-turn cursor; parser and persisted row shape unchanged.
-        "3c984b655688593f", // 0.54.x row-ownership evidence fix; parser and persisted row shape unchanged.
         "5f8507161b23757c", // 0.54.2 tokscale parity + priority evidence; persisted row shape unchanged.
     ]
     static let incompatibleRetainedReportPredecessorParserHashes: Set<String> = [

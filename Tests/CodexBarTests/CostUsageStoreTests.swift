@@ -1047,12 +1047,12 @@ extension CostUsageStoreTests {
             "dd19ffa2dcfa8d47",
             "8050a4faf4fddb96",
             "cfd84d13ad7d4cfa",
+            "3c984b655688593f",
             "98da5914d2f6a9cd",
             "43609cc56f76a003",
             "b975eb705f905b9a",
             "47144baa8daccf52",
             "2d17f4981b78d07f",
-            "3c984b655688593f",
             "5f8507161b23757c",
         ])
         let predecessorVersion = CostUsageStore.combinedSchemaVersion(

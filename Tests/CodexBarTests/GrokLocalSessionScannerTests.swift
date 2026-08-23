@@ -261,6 +261,115 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
     }
 
     @Test
+    func `bounded tail scan retains only recent turns and marks history incomplete`() throws {
+        GrokLocalSessionScanner.resetParseCacheForTesting()
+        defer { GrokLocalSessionScanner.resetParseCacheForTesting() }
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let firstAt = try self.localDate(day: 20, hour: 17, minute: 40)
+        let secondAt = firstAt.addingTimeInterval(1)
+        let recentObjects = [
+            self.turn(timestamp: firstAt, usage: self.singleModelUsage(input: 10, output: 1)),
+            self.turn(timestamp: secondAt, usage: self.singleModelUsage(input: 20, output: 2)),
+        ]
+        let recentLines = try recentObjects.map { object -> String in
+            let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            return try #require(String(data: data, encoding: .utf8))
+        }
+        let recentContents = recentLines.joined(separator: "\n") + "\n"
+        let contents = String(repeating: "x", count: 4096) + "\n" + recentContents
+        let updates = fixture.session.appendingPathComponent("updates.jsonl")
+        try Data(contents.utf8).write(to: updates)
+        try FileManager.default.setAttributes(
+            [.modificationDate: secondAt.addingTimeInterval(60)],
+            ofItemAtPath: updates.path)
+        let limits = GrokLocalSessionScanLimits(
+            maximumFileBytes: Int64(recentContents.utf8.count),
+            maximumLineBytes: 64 * 1024,
+            maximumTurnsPerFile: 1)
+
+        let summary = try GrokLocalSessionScanner.summarize(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: 7,
+            now: secondAt.addingTimeInterval(120),
+            modelsDevCatalog: Self.catalog(),
+            scanLimits: limits)
+        let snapshot = try #require(summary.toCostUsageTokenSnapshot(historyDays: 7))
+
+        #expect(summary.totalTokens == 22)
+        #expect(summary.lastSessionAt == secondAt)
+        #expect(!summary.historyCoverageIsEstablished)
+        #expect(!snapshot.historyCoverageIsEstablished)
+        #expect(GrokLocalSessionScanner.parseCacheTurnCountForTesting() == 1)
+        #expect(GrokLocalSessionScanner.parseCacheMetricsForTesting().jsonDecodeCount == 2)
+    }
+
+    @Test
+    func `parse cache caps retained session entries globally`() throws {
+        GrokLocalSessionScanner.resetParseCacheForTesting()
+        defer { GrokLocalSessionScanner.resetParseCacheForTesting() }
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sessionsRoot = fixture.session.deletingLastPathComponent()
+        let turnAt = try self.localDate(day: 20, hour: 17, minute: 50)
+        for index in 0..<80 {
+            let session = sessionsRoot.appendingPathComponent("session-\(index)", isDirectory: true)
+            try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+            try self.writeUpdates(
+                [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 1, output: 1))],
+                to: session.appendingPathComponent("updates.jsonl"),
+                modificationDate: turnAt.addingTimeInterval(60))
+        }
+
+        let summary = try self.summarize(fixture: fixture, now: turnAt.addingTimeInterval(120))
+
+        #expect(summary.totalTokens == 160)
+        #expect(summary.historyCoverageIsEstablished)
+        #expect(GrokLocalSessionScanner.parseCacheEntryCountForTesting() <= 64)
+        #expect(GrokLocalSessionScanner.parseCacheTurnCountForTesting() <= 64)
+    }
+
+    @Test
+    func `global scan budgets retain newest sessions and mark history incomplete`() throws {
+        GrokLocalSessionScanner.resetParseCacheForTesting()
+        defer { GrokLocalSessionScanner.resetParseCacheForTesting() }
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sessionsRoot = fixture.session.deletingLastPathComponent()
+        let firstAt = try self.localDate(day: 20, hour: 18)
+        for index in 0..<5 {
+            let session = sessionsRoot.appendingPathComponent("budget-session-\(index)", isDirectory: true)
+            try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+            let turnAt = firstAt.addingTimeInterval(TimeInterval(index))
+            try self.writeUpdates(
+                [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: index + 1, output: 0))],
+                to: session.appendingPathComponent("updates.jsonl"),
+                modificationDate: turnAt)
+        }
+        let limits = GrokLocalSessionScanLimits(
+            maximumFileBytes: 64 * 1024,
+            maximumLineBytes: 64 * 1024,
+            maximumTurnsPerFile: 10,
+            maximumSessions: 3,
+            maximumTotalBytes: 1024 * 1024,
+            maximumTotalTurns: 2)
+
+        let summary = try GrokLocalSessionScanner.summarize(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: 7,
+            now: firstAt.addingTimeInterval(60),
+            modelsDevCatalog: Self.catalog(),
+            scanLimits: limits)
+
+        #expect(summary.totalTokens == 9)
+        #expect(summary.sessionCount == 2)
+        #expect(summary.lastSessionAt == firstAt.addingTimeInterval(4))
+        #expect(!summary.historyCoverageIsEstablished)
+        #expect(GrokLocalSessionScanner.parseCacheEntryCountForTesting() == 2)
+        #expect(GrokLocalSessionScanner.parseCacheTurnCountForTesting() == 2)
+    }
+
+    @Test
     func `absurd model call count promptly falls back without iterating file content`() throws {
         let fixture = try self.makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

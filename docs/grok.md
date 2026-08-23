@@ -127,10 +127,16 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      unknown-usage retry adopts only the validated active-period shape described
      above. This keeps billing visible when
      `grok agent stdio` returns `Method not found`.
-5) **Local session signals** (informational fallback)
-   - Walks `~/.grok/sessions/<encoded-cwd>/<session-id>/signals.json` files (last 30 days).
-   - Aggregates `totalTokensBeforeCompaction`, `contextTokensUsed`, `modelsUsed`,
-     and the most recent session timestamp.
+5) **Local completed-turn history** (informational fallback and Usage & Spend)
+   - Streams completed `turn_completed` records from
+     `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl` over the requested
+     history window (up to 365 days).
+   - Aggregates the recorded per-turn token usage, model breakdown, request count,
+     and timestamps. Public xAI list prices provide a non-billed cost estimate.
+   - Reads only a bounded tail of each growing JSONL file, caps individual records
+     and retained parsed turns, and reports history as incomplete if a bound is hit.
+   - Uses `signals.json` only as a metadata fallback for sessions with no completed
+     turns; context-window occupancy is never counted as consumed tokens.
 
 ## OAuth credentials
 
@@ -226,30 +232,51 @@ records credential provenance at request time.
 
 ## Local fallback (`~/.grok/sessions/`)
 
-Each session directory contains `signals.json` with fields like:
+Each session directory records completed turns in `updates.jsonl`. CodexBar reads
+`params.update.sessionUpdate == "turn_completed"` records and uses the record's
+timestamp and actual usage payload:
 
 ```json
 {
-  "turnCount": 1,
-  "contextTokensUsed": 2968,
-  "contextWindowTokens": 512000,
-  "totalTokensBeforeCompaction": 0,
-  "modelsUsed": ["grok-build"],
-  "primaryModelId": "grok-build",
-  "sessionDurationSeconds": 47
+  "timestamp": 1787472000,
+  "params": {
+    "update": {
+      "sessionUpdate": "turn_completed",
+      "usage": {
+        "inputTokens": 1000,
+        "outputTokens": 100,
+        "totalTokens": 1100,
+        "modelCalls": 1,
+        "modelUsage": {
+          "grok-4.6-build": {
+            "inputTokens": 1000,
+            "outputTokens": 100,
+            "totalTokens": 1100
+          }
+        }
+      }
+    }
+  }
 }
 ```
 
-CodexBar aggregates these into a `GrokLocalSessionSummary` (session count, total
-tokens, last session time, primary model, per-day token buckets) and exposes it for
-diagnostics even when the RPC path is unavailable.
+CodexBar aggregates these into a `GrokLocalSessionSummary` (session count, actual
+tokens, last session time, primary model, and local-day buckets) over the requested
+window, up to 365 days. The reader streams a bounded tail of each file, limits a
+single JSONL record to 1 MiB, and retains at most 20,000 recent turns per file. A
+scan considers at most 256 recent sessions, 256 MiB, and 100,000 turns; the
+process-wide LRU parse cache retains at most 64 files or 50,000 turns. If a bound
+drops history, the resulting snapshot is marked incomplete instead of presenting
+partial totals as complete. `signals.json` contributes model/session metadata only
+when no completed turns are available and is also limited to 1 MiB.
 
 Those local daily token buckets also feed the shared Usage & Spend catalog so an
 enabled Grok subscription is counted instead of omitted. SuperGrok/X Premium+
 credits remain a quota window on the usage bar; they are never converted into
-dollars. Local session scans run on the dedicated background usage-scan queue;
-menu cards and spend views reuse the already-published snapshot instead of
-walking the session directory whenever they render.
+dollars. Public xAI list-price dollars are shown only as a non-billed estimate.
+Local session scans run on the dedicated background usage-scan queue; menu cards
+and spend views reuse the already-published snapshot instead of walking the session
+directory whenever they render.
 
 ## Status
 

@@ -60,6 +60,7 @@ public struct GrokLocalSessionSummary: Sendable {
     public let models: [String]
     public let daily: [GrokLocalDailyBucket]
     public let scannedAt: Date
+    public let historyCoverageIsEstablished: Bool
 
     public init(
         sessionCount: Int,
@@ -68,7 +69,8 @@ public struct GrokLocalSessionSummary: Sendable {
         primaryModel: String?,
         models: [String],
         daily: [GrokLocalDailyBucket] = [],
-        scannedAt: Date = .init())
+        scannedAt: Date = .init(),
+        historyCoverageIsEstablished: Bool = true)
     {
         self.sessionCount = sessionCount
         self.totalTokens = totalTokens
@@ -77,6 +79,7 @@ public struct GrokLocalSessionSummary: Sendable {
         self.models = models
         self.daily = daily
         self.scannedAt = scannedAt
+        self.historyCoverageIsEstablished = historyCoverageIsEstablished
     }
 
     /// Local tokens priced at public API list rates; this is an estimate, not a Grok bill.
@@ -110,7 +113,7 @@ public struct GrokLocalSessionSummary: Sendable {
             last30DaysCostUSD: pricedDays.isEmpty ? nil : pricedDays.reduce(0, +),
             last30DaysRequests: self.daily.reduce(0) { $0 + $1.requestCount },
             historyDays: historyDays,
-            historyCoverageIsEstablished: true,
+            historyCoverageIsEstablished: self.historyCoverageIsEstablished,
             costProvenance: .listPriceEstimate,
             daily: entries,
             updatedAt: self.scannedAt)
@@ -120,6 +123,49 @@ public struct GrokLocalSessionSummary: Sendable {
 struct GrokLocalSessionParseCacheMetrics: Sendable, Equatable {
     let fileDecodeCount: Int
     let jsonDecodeCount: Int
+}
+
+struct GrokLocalSessionScanLimits: Sendable, Equatable {
+    static let production = Self(
+        maximumFileBytes: 64 * 1024 * 1024,
+        maximumLineBytes: 1024 * 1024,
+        maximumTurnsPerFile: 20000,
+        maximumSessions: 256,
+        maximumTotalBytes: 256 * 1024 * 1024,
+        maximumTotalTurns: 100_000)
+
+    let maximumFileBytes: Int64
+    let maximumLineBytes: Int
+    let maximumTurnsPerFile: Int
+    let maximumSessions: Int
+    let maximumTotalBytes: Int64
+    let maximumTotalTurns: Int
+
+    init(
+        maximumFileBytes: Int64,
+        maximumLineBytes: Int,
+        maximumTurnsPerFile: Int,
+        maximumSessions: Int = 256,
+        maximumTotalBytes: Int64 = 256 * 1024 * 1024,
+        maximumTotalTurns: Int = 100_000)
+    {
+        self.maximumFileBytes = max(1, maximumFileBytes)
+        self.maximumLineBytes = max(1, maximumLineBytes)
+        self.maximumTurnsPerFile = max(1, maximumTurnsPerFile)
+        self.maximumSessions = max(1, maximumSessions)
+        self.maximumTotalBytes = max(1, maximumTotalBytes)
+        self.maximumTotalTurns = max(1, maximumTotalTurns)
+    }
+
+    func limitingFileBytes(to maximumFileBytes: Int64) -> Self {
+        Self(
+            maximumFileBytes: min(self.maximumFileBytes, maximumFileBytes),
+            maximumLineBytes: self.maximumLineBytes,
+            maximumTurnsPerFile: self.maximumTurnsPerFile,
+            maximumSessions: self.maximumSessions,
+            maximumTotalBytes: self.maximumTotalBytes,
+            maximumTotalTurns: self.maximumTotalTurns)
+    }
 }
 
 private struct GrokParsedTokenUsage: Sendable {
@@ -138,32 +184,56 @@ private struct GrokParsedTurn: Sendable {
     let modelUsage: [String: GrokParsedTokenUsage]
 }
 
+private struct GrokParsedTurnBatch: Sendable {
+    let turns: [GrokParsedTurn]
+    let historyCoverageIsEstablished: Bool
+}
+
+private struct GrokTurnDecodeResult: Sendable {
+    let batch: GrokParsedTurnBatch
+    let jsonDecodeCount: Int
+    let cacheable: Bool
+}
+
 private final class GrokLocalSessionParseCache: @unchecked Sendable {
-    private struct Entry {
+    private struct Identity: Equatable {
         let size: Int
         let mtimeIntervalSince1970: TimeInterval
-        let turns: [GrokParsedTurn]
+        let limits: GrokLocalSessionScanLimits
     }
 
+    private struct Entry {
+        let identity: Identity
+        let batch: GrokParsedTurnBatch
+        var accessOrdinal: UInt64
+    }
+
+    private static let maximumEntries = 64
+    private static let maximumCachedTurns = 50000
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
     private var fileDecodeCount = 0
     private var jsonDecodeCount = 0
+    private var accessOrdinal: UInt64 = 0
 
     func turns(
         path: String,
         size: Int,
         mtimeIntervalSince1970: TimeInterval,
-        decode: () -> (turns: [GrokParsedTurn], jsonDecodeCount: Int)) -> [GrokParsedTurn]
+        limits: GrokLocalSessionScanLimits,
+        decode: () -> GrokTurnDecodeResult) -> GrokParsedTurnBatch
     {
+        let identity = Identity(
+            size: size,
+            mtimeIntervalSince1970: mtimeIntervalSince1970,
+            limits: limits)
         self.lock.lock()
-        let observedIdentity = self.entries[path].map { ($0.size, $0.mtimeIntervalSince1970) }
-        if let entry = self.entries[path],
-           entry.size == size,
-           entry.mtimeIntervalSince1970 == mtimeIntervalSince1970
-        {
+        let observedIdentity = self.entries[path]?.identity
+        if var entry = self.entries[path], entry.identity == identity {
+            entry.accessOrdinal = self.nextAccessOrdinal()
+            self.entries[path] = entry
             self.lock.unlock()
-            return entry.turns
+            return entry.batch
         }
         self.lock.unlock()
 
@@ -172,40 +242,41 @@ private final class GrokLocalSessionParseCache: @unchecked Sendable {
         defer { self.lock.unlock() }
         self.fileDecodeCount += 1
         self.jsonDecodeCount += decoded.jsonDecodeCount
-        if let entry = self.entries[path] {
-            if entry.size == size,
-               entry.mtimeIntervalSince1970 == mtimeIntervalSince1970
-            {
-                return entry.turns
-            }
-            if observedIdentity?.0 != entry.size ||
-                observedIdentity?.1 != entry.mtimeIntervalSince1970
-            {
-                // A concurrent scan cached a different file identity while this decode was in flight.
-                // Return this scan's value without replacing the newer entry.
-                return decoded.turns
-            }
-        } else if observedIdentity != nil {
-            // A concurrent eviction happened while this decode was in flight.
-            return decoded.turns
+        guard decoded.cacheable else { return decoded.batch }
+        if var entry = self.entries[path], entry.identity == identity {
+            entry.accessOrdinal = self.nextAccessOrdinal()
+            self.entries[path] = entry
+            return entry.batch
+        }
+        if self.entries[path]?.identity != observedIdentity {
+            // A concurrent scan cached a different file identity, or evicted this one, while decoding.
+            return decoded.batch
         }
         self.entries[path] = Entry(
-            size: size,
-            mtimeIntervalSince1970: mtimeIntervalSince1970,
-            turns: decoded.turns)
-        return decoded.turns
+            identity: identity,
+            batch: decoded.batch,
+            accessOrdinal: self.nextAccessOrdinal())
+        self.trimToLimits()
+        return decoded.batch
     }
 
     func retainEntries(at visitedPaths: Set<String>) {
         self.lock.lock()
         defer { self.lock.unlock() }
         self.entries = self.entries.filter { visitedPaths.contains($0.key) }
+        self.trimToLimits()
     }
 
     func entryCount() -> Int {
         self.lock.lock()
         defer { self.lock.unlock() }
         return self.entries.count
+    }
+
+    func cachedTurnCount() -> Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.entries.values.reduce(0) { $0 + $1.batch.turns.count }
     }
 
     func metrics() -> GrokLocalSessionParseCacheMetrics {
@@ -222,6 +293,23 @@ private final class GrokLocalSessionParseCache: @unchecked Sendable {
         self.entries.removeAll()
         self.fileDecodeCount = 0
         self.jsonDecodeCount = 0
+        self.accessOrdinal = 0
+    }
+
+    private func nextAccessOrdinal() -> UInt64 {
+        self.accessOrdinal &+= 1
+        return self.accessOrdinal
+    }
+
+    private func trimToLimits() {
+        var cachedTurns = self.entries.values.reduce(0) { $0 + $1.batch.turns.count }
+        while self.entries.count > Self.maximumEntries || cachedTurns > Self.maximumCachedTurns {
+            guard let victim = self.entries.min(by: { $0.value.accessOrdinal < $1.value.accessOrdinal }) else {
+                return
+            }
+            cachedTurns -= victim.value.batch.turns.count
+            self.entries.removeValue(forKey: victim.key)
+        }
     }
 }
 
@@ -231,14 +319,14 @@ public enum GrokLocalSessionScanner {
 
     private static let maximumValidatedModelCalls = 10000
 
-    private struct SessionFiles {
-        var updates: URL?
-        var signals: URL?
-    }
-
     private struct FileIdentity {
         let size: Int
         let modificationDate: Date
+    }
+
+    private struct RecentSessionSelection {
+        let paths: [String]
+        let historyCoverageIsEstablished: Bool
     }
 
     private struct MutableModelBreakdown {
@@ -356,7 +444,8 @@ public enum GrokLocalSessionScanner {
         now: Date = .init(),
         modelsDevCatalog: ModelsDevCatalog,
         modelsDevCacheRoot: URL? = nil,
-        customPricing: CostUsageCustomPricing? = .empty) -> GrokLocalSessionSummary
+        customPricing: CostUsageCustomPricing? = .empty,
+        scanLimits: GrokLocalSessionScanLimits = .production) -> GrokLocalSessionSummary
     {
         self.summarize(
             env: env,
@@ -366,7 +455,8 @@ public enum GrokLocalSessionScanner {
             pricing: PricingContext(
                 modelsDevCatalog: modelsDevCatalog,
                 modelsDevCacheRoot: modelsDevCacheRoot,
-                customPricing: customPricing))
+                customPricing: customPricing),
+            scanLimits: scanLimits)
     }
 
     static func summarize(
@@ -393,56 +483,65 @@ public enum GrokLocalSessionScanner {
         fileManager: FileManager,
         lookbackDays: Int,
         now: Date,
-        pricing: PricingContext) -> GrokLocalSessionSummary
+        pricing: PricingContext,
+        scanLimits: GrokLocalSessionScanLimits = .production) -> GrokLocalSessionSummary
     {
         let root = GrokCredentialsStore.grokHomeURL(env: env, fileManager: fileManager)
             .appendingPathComponent("sessions", isDirectory: true)
         var visitedCachePaths: Set<String> = []
         defer { self.parseCache.retainEntries(at: visitedCachePaths) }
-        guard let rootEnum = fileManager.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles])
+        let calendar = Calendar.current
+        let lookbackCutoff = calendar.date(byAdding: .day, value: -max(0, lookbackDays), to: now) ?? now
+        guard let sessionSelection = self.recentSessionPaths(
+            root: root,
+            fileManager: fileManager,
+            lookbackCutoff: lookbackCutoff,
+            maximumCount: scanLimits.maximumSessions)
         else {
             return self.emptySummary(now: now)
         }
 
-        var sessions: [String: SessionFiles] = [:]
-        while let url = rootEnum.nextObject() as? URL {
-            guard !Task.isCancelled else { return self.emptySummary(now: now) }
-            let name = url.lastPathComponent
-            guard name == "updates.jsonl" || name == "signals.json" else { continue }
-            let sessionPath = url.deletingLastPathComponent().path
-            if name == "updates.jsonl" {
-                sessions[sessionPath, default: SessionFiles()].updates = url
-            } else {
-                sessions[sessionPath, default: SessionFiles()].signals = url
-            }
-        }
-
-        let calendar = Calendar.current
-        let lookbackCutoff = calendar.date(byAdding: .day, value: -max(0, lookbackDays), to: now) ?? now
         var sessionCount = 0
         var lastSessionAt: Date?
         var aggregation = ScanAggregation()
+        var remainingTotalBytes = scanLimits.maximumTotalBytes
+        var remainingTotalTurns = scanLimits.maximumTotalTurns
+        var historyCoverageIsEstablished = sessionSelection.historyCoverageIsEstablished
 
-        for (sessionPath, files) in sessions {
+        for sessionPath in sessionSelection.paths {
             guard !Task.isCancelled else { return self.emptySummary(now: now) }
+            guard remainingTotalBytes > 0, remainingTotalTurns > 0 else {
+                historyCoverageIsEstablished = false
+                break
+            }
+            let sessionURL = URL(fileURLWithPath: sessionPath, isDirectory: true)
             var updatesYieldedCompletedTurns = false
-            if let updates = files.updates,
-               let identity = self.fileIdentity(for: updates),
+            let updates = sessionURL.appendingPathComponent("updates.jsonl")
+            if let identity = self.fileIdentity(for: updates),
                identity.modificationDate >= lookbackCutoff
             {
+                let fileByteLimit = min(scanLimits.maximumFileBytes, remainingTotalBytes)
+                let fileLimits = scanLimits.limitingFileBytes(to: fileByteLimit)
+                remainingTotalBytes -= min(Int64(max(0, identity.size)), fileByteLimit)
                 visitedCachePaths.insert(updates.path)
-                let turns = self.parseCache.turns(
+                let parsed = self.parseCache.turns(
                     path: updates.path,
                     size: identity.size,
-                    mtimeIntervalSince1970: identity.modificationDate.timeIntervalSince1970)
+                    mtimeIntervalSince1970: identity.modificationDate.timeIntervalSince1970,
+                    limits: fileLimits)
                 {
-                    self.decodeTurns(at: updates)
+                    self.decodeTurns(at: updates, fileSize: identity.size, limits: fileLimits)
                 }
-                updatesYieldedCompletedTurns = !turns.isEmpty
-                let currentTurns = turns.filter { $0.timestamp >= lookbackCutoff }
+                guard !Task.isCancelled else { return self.emptySummary(now: now) }
+                historyCoverageIsEstablished = historyCoverageIsEstablished
+                    && parsed.historyCoverageIsEstablished
+                updatesYieldedCompletedTurns = !parsed.turns.isEmpty
+                var currentTurns = parsed.turns.filter { $0.timestamp >= lookbackCutoff }
+                if currentTurns.count > remainingTotalTurns {
+                    currentTurns = Array(currentTurns.suffix(remainingTotalTurns))
+                    historyCoverageIsEstablished = false
+                }
+                remainingTotalTurns -= currentTurns.count
                 if !currentTurns.isEmpty {
                     sessionCount += 1
                     for turn in currentTurns {
@@ -460,18 +559,26 @@ public enum GrokLocalSessionScanner {
                 }
             }
 
+            let fallback = sessionURL.appendingPathComponent("signals.json")
             if !updatesYieldedCompletedTurns,
-               let fallback = files.signals,
                let identity = self.fileIdentity(for: fallback),
-               identity.modificationDate >= lookbackCutoff,
-               let metadataModels = self.readSignalsMetadata(at: fallback)
+               identity.modificationDate >= lookbackCutoff
             {
-                sessionCount += 1
-                if identity.modificationDate > (lastSessionAt ?? Date.distantPast) {
-                    lastSessionAt = identity.modificationDate
-                }
-                for model in metadataModels {
-                    aggregation.modelCounts[model, default: 0] += 1
+                let signalByteLimit = min(Int64(scanLimits.maximumLineBytes), remainingTotalBytes)
+                remainingTotalBytes -= min(Int64(max(0, identity.size)), signalByteLimit)
+                if Int64(identity.size) > signalByteLimit {
+                    historyCoverageIsEstablished = false
+                } else if let metadataModels = self.readSignalsMetadata(
+                    at: fallback,
+                    maximumBytes: Int(signalByteLimit))
+                {
+                    sessionCount += 1
+                    if identity.modificationDate > (lastSessionAt ?? Date.distantPast) {
+                        lastSessionAt = identity.modificationDate
+                    }
+                    for model in metadataModels {
+                        aggregation.modelCounts[model, default: 0] += 1
+                    }
                 }
             }
         }
@@ -487,7 +594,8 @@ public enum GrokLocalSessionScanner {
             primaryModel: sortedModels.first,
             models: sortedModels,
             daily: buckets,
-            scannedAt: now)
+            scannedAt: now,
+            historyCoverageIsEstablished: historyCoverageIsEstablished)
     }
 
     public static func summarizeOffMainThread(
@@ -515,6 +623,10 @@ public enum GrokLocalSessionScanner {
         self.parseCache.entryCount()
     }
 
+    static func parseCacheTurnCountForTesting() -> Int {
+        self.parseCache.cachedTurnCount()
+    }
+
     private static func emptySummary(now: Date) -> GrokLocalSessionSummary {
         GrokLocalSessionSummary(
             sessionCount: 0,
@@ -533,17 +645,115 @@ public enum GrokLocalSessionScanner {
         return FileIdentity(size: size, modificationDate: modificationDate)
     }
 
-    private static func decodeTurns(at url: URL) -> (turns: [GrokParsedTurn], jsonDecodeCount: Int) {
-        guard let data = try? Data(contentsOf: url) else { return ([], 0) }
+    private static func recentSessionPaths(
+        root: URL,
+        fileManager: FileManager,
+        lookbackCutoff: Date,
+        maximumCount: Int) -> RecentSessionSelection?
+    {
+        guard let rootEnum = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles])
+        else { return nil }
+
+        var sessionModificationDates: [String: Date] = [:]
+        var historyCoverageIsEstablished = true
+        let trimThreshold = maximumCount > Int.max / 2 ? Int.max : maximumCount * 2
+        while let url = rootEnum.nextObject() as? URL {
+            guard !Task.isCancelled else { return nil }
+            let name = url.lastPathComponent
+            guard name == "updates.jsonl" || name == "signals.json" else { continue }
+            guard let identity = self.fileIdentity(for: url),
+                  identity.modificationDate >= lookbackCutoff
+            else { continue }
+            let sessionPath = url.deletingLastPathComponent().path
+            sessionModificationDates[sessionPath] = max(
+                sessionModificationDates[sessionPath] ?? .distantPast,
+                identity.modificationDate)
+            if sessionModificationDates.count > trimThreshold {
+                historyCoverageIsEstablished = false
+                self.trimRecentSessions(&sessionModificationDates, maximumCount: maximumCount)
+            }
+        }
+        if sessionModificationDates.count > maximumCount {
+            historyCoverageIsEstablished = false
+            self.trimRecentSessions(&sessionModificationDates, maximumCount: maximumCount)
+        }
+        let paths = sessionModificationDates.sorted { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+        }.map(\.key)
+        return RecentSessionSelection(
+            paths: paths,
+            historyCoverageIsEstablished: historyCoverageIsEstablished)
+    }
+
+    private static func trimRecentSessions(
+        _ sessions: inout [String: Date],
+        maximumCount: Int)
+    {
+        guard sessions.count > maximumCount else { return }
+        let recent = sessions.sorted { lhs, rhs in
+            lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
+        }.prefix(maximumCount)
+        sessions = Dictionary(uniqueKeysWithValues: recent.map { ($0.key, $0.value) })
+    }
+
+    private static func decodeTurns(
+        at url: URL,
+        fileSize: Int,
+        limits: GrokLocalSessionScanLimits) -> GrokTurnDecodeResult
+    {
         var turns: [GrokParsedTurn] = []
         var jsonDecodeCount = 0
-        for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
-            guard line.range(of: self.turnCompletedNeedle) != nil else { continue }
-            jsonDecodeCount += 1
-            guard let turn = self.decodeTurn(Data(line)) else { continue }
-            turns.append(turn)
+        let boundedFileSize = max(0, Int64(fileSize))
+        let startOffset = max(0, boundedFileSize - limits.maximumFileBytes)
+        var historyCoverageIsEstablished = startOffset == 0
+        var cacheable = true
+        var droppedTurns = false
+        let compactionThreshold = limits.maximumTurnsPerFile > Int.max / 2
+            ? Int.max
+            : limits.maximumTurnsPerFile * 2
+
+        do {
+            try CostUsageJsonl.scan(
+                fileURL: url,
+                offset: startOffset,
+                maxLineBytes: limits.maximumLineBytes,
+                prefixBytes: limits.maximumLineBytes,
+                maxBytesToRead: limits.maximumFileBytes,
+                checkCancellation: {
+                    if Task.isCancelled { throw CancellationError() }
+                },
+                onLine: { line in
+                    guard line.bytes.range(of: self.turnCompletedNeedle) != nil else { return }
+                    jsonDecodeCount += 1
+                    guard !line.wasTruncated else {
+                        historyCoverageIsEstablished = false
+                        return
+                    }
+                    guard let turn = autoreleasepool(invoking: { self.decodeTurn(line.bytes) }) else { return }
+                    turns.append(turn)
+                    if turns.count > compactionThreshold {
+                        turns.removeFirst(limits.maximumTurnsPerFile)
+                        droppedTurns = true
+                    }
+                })
+        } catch {
+            historyCoverageIsEstablished = false
+            cacheable = false
         }
-        return (turns, jsonDecodeCount)
+
+        if turns.count > limits.maximumTurnsPerFile {
+            turns.removeFirst(turns.count - limits.maximumTurnsPerFile)
+            droppedTurns = true
+        }
+        return GrokTurnDecodeResult(
+            batch: GrokParsedTurnBatch(
+                turns: turns,
+                historyCoverageIsEstablished: historyCoverageIsEstablished && !droppedTurns),
+            jsonDecodeCount: jsonDecodeCount,
+            cacheable: cacheable)
     }
 
     private static func decodeTurn(_ data: Data) -> GrokParsedTurn? {
@@ -594,8 +804,14 @@ public enum GrokLocalSessionScanner {
         return nil
     }
 
-    private static func readSignalsMetadata(at url: URL) -> [String]? {
-        guard let data = try? Data(contentsOf: url),
+    private static func readSignalsMetadata(at url: URL, maximumBytes: Int) -> [String]? {
+        guard maximumBytes > 0,
+              let handle = try? FileHandle(forReadingFrom: url)
+        else { return nil }
+        defer { try? handle.close() }
+        let readLimit = maximumBytes == Int.max ? Int.max : maximumBytes + 1
+        guard let data = try? handle.read(upToCount: readLimit),
+              data.count <= maximumBytes,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         var models: [String] = []

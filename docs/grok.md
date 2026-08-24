@@ -64,6 +64,11 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      still without cookies) and adopts its percent when it has one, keeping the
      credits period and plan metadata. When grok.com has no percent either, or the
      retry fails, usage stays unknown — an absent value is never reported as 0%.
+     Only a percentage that grok.com actually put on the wire is adopted: that
+     parser reports its own no-usage-yet frame (a period with no percentage field)
+     as 0, and promoting that reading would recreate the fabricated 0%. The retry
+     also runs under a 6-second budget, because period-only payloads recur on every
+     refresh and a grok.com outage must not delay the credits answer already in hand.
    - Plan name does not come from the credits payload. After a successful
      auth-file or SuperGrok OAuth web billing result (CLI-proxy) or the team
      identity-only path, CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings`

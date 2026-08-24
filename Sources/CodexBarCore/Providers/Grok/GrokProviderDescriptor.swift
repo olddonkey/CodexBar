@@ -263,10 +263,20 @@ struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
     /// ends the fetch. This stays on the auth-file token: no browser cookie import is involved.
     /// grok.com remains best-effort — when it also has no percent, the proxy's period and plan
     /// metadata are kept with usage still unknown.
+    ///
+    /// Two properties keep the enrichment from costing more than it adds. Only a wire-published
+    /// percent is adopted, because the grok.com parser reports its own no-usage-yet frame as 0
+    /// without any percentage on the wire and promoting that would rebuild the fabricated 0%
+    /// #3157 removed. And the request runs under a short deadline: period-only payloads recur on
+    /// every refresh for affected plans, so a grok.com outage must not hold back a proxy snapshot
+    /// that is already valid for the caller's remaining fields.
+    static let unknownUsageEnrichmentBudget: Duration = .seconds(6)
+
     static func resolvingUnknownUsage(
         _ proxySnapshot: GrokWebBillingSnapshot,
         credentials: GrokCredentials,
-        grpcBilling: GrokWebFetchStrategy.ProxyBillingFetch = {
+        budget: Duration = GrokOAuthFetchStrategy.unknownUsageEnrichmentBudget,
+        grpcBilling: @escaping GrokWebFetchStrategy.ProxyBillingFetch = {
             try await GrokWebBillingFetcher.fetch(credentials: $0)
         }) async throws -> (
         snapshot: GrokWebBillingSnapshot,
@@ -276,18 +286,24 @@ struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
         guard proxySnapshot.usedPercent == nil else {
             return (proxySnapshot, "grok-cli-proxy", true)
         }
-        do {
-            let grpcSnapshot = try await grpcBilling(credentials)
-            guard grpcSnapshot.usedPercent != nil else {
-                return (proxySnapshot, "grok-cli-proxy", true)
+        let proxyAnswer = (proxySnapshot, "grok-cli-proxy", true)
+        let join = BoundedTaskJoin(sourceTask: Task { try await grpcBilling(credentials) })
+        switch await join.value(joinGrace: budget) {
+        case let .value(grpcSnapshot):
+            guard grpcSnapshot.usedPercent != nil, grpcSnapshot.usedPercentIsWirePublished else {
+                return proxyAnswer
             }
             return (grpcSnapshot.completing(with: proxySnapshot), "grok-web", true)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as URLError where error.code == .cancelled {
-            throw error
-        } catch {
-            return (proxySnapshot, "grok-cli-proxy", true)
+        case .timedOut:
+            return proxyAnswer
+        case let .failure(error):
+            if error is CancellationError {
+                throw CancellationError()
+            }
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                throw urlError
+            }
+            return proxyAnswer
         }
     }
 

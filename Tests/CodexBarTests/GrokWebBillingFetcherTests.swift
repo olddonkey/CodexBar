@@ -102,6 +102,7 @@ struct GrokWebBillingFetcherTests {
 
         #expect(snapshot.usedPercent == 42.5)
         #expect(snapshot.resetsAt == Date(timeIntervalSince1970: TimeInterval(reset)))
+        #expect(snapshot.usedPercentIsWirePublished)
     }
 
     @Test
@@ -623,6 +624,9 @@ struct GrokWebBillingFetcherTests {
 
         #expect(snapshot.usedPercent == 0)
         #expect(snapshot.resetsAt == Date(timeIntervalSince1970: 1_780_272_000))
+        // The frame carries no percentage field at all, so this zero is the surface's own
+        // no-usage-yet reading and must never travel as a published percent.
+        #expect(!snapshot.usedPercentIsWirePublished)
     }
 
     @Test

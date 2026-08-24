@@ -482,6 +482,60 @@ struct GrokCreditsProxyFetcherTests {
     }
 
     @Test
+    func `an inferred grok dot com zero never becomes a published percent`() async throws {
+        let reset = Date(timeIntervalSince1970: 1_800_000_003)
+        let result = try await GrokOAuthFetchStrategy.resolvingUnknownUsage(
+            GrokWebBillingSnapshot(
+                usedPercent: nil,
+                resetsAt: reset,
+                subscriptionTier: "SuperGrok Heavy"),
+            credentials: Self.credentials,
+            grpcBilling: { _ in
+                // The shape grok.com returns when its frame carries no percentage field at all.
+                GrokWebBillingSnapshot(
+                    usedPercent: 0,
+                    resetsAt: nil,
+                    usedPercentIsWirePublished: false)
+            })
+
+        #expect(result.snapshot.usedPercent == nil)
+        #expect(result.snapshot.resetsAt == reset)
+        #expect(result.snapshot.subscriptionTier == "SuperGrok Heavy")
+        #expect(result.sourceLabel == "grok-cli-proxy")
+    }
+
+    @Test
+    func `a published grok dot com zero still replaces unknown usage`() async throws {
+        let result = try await GrokOAuthFetchStrategy.resolvingUnknownUsage(
+            GrokWebBillingSnapshot(usedPercent: nil, resetsAt: nil),
+            credentials: Self.credentials,
+            grpcBilling: { _ in GrokWebBillingSnapshot(usedPercent: 0, resetsAt: nil) })
+
+        #expect(result.snapshot.usedPercent == 0)
+        #expect(result.sourceLabel == "grok-web")
+    }
+
+    @Test
+    func `a stalled grok dot com does not hold back the credits answer`() async throws {
+        let reset = Date(timeIntervalSince1970: 1_800_000_003)
+        let started = ContinuousClock.now
+        let result = try await GrokOAuthFetchStrategy.resolvingUnknownUsage(
+            GrokWebBillingSnapshot(usedPercent: nil, resetsAt: reset),
+            credentials: Self.credentials,
+            budget: .milliseconds(50),
+            grpcBilling: { _ in
+                try await Task.sleep(for: .seconds(30))
+                return GrokWebBillingSnapshot(usedPercent: 20, resetsAt: nil)
+            })
+        let elapsed = ContinuousClock.now - started
+
+        #expect(result.snapshot.usedPercent == nil)
+        #expect(result.snapshot.resetsAt == reset)
+        #expect(result.sourceLabel == "grok-cli-proxy")
+        #expect(elapsed < .seconds(5))
+    }
+
+    @Test
     func `unknown credits usage leaves the menu card without a rate window`() {
         let unknown = GrokUsageSnapshot(
             billing: nil,

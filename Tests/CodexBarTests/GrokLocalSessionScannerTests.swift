@@ -588,6 +588,39 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
 
         #expect(empty == nil)
         #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot == nil)
+
+        let newTurnAt = turnAt.addingTimeInterval(180)
+        try self.writeUpdates(
+            [self.turn(timestamp: newTurnAt, usage: self.singleModelUsage(input: 70, output: 7))],
+            to: updates,
+            modificationDate: newTurnAt.addingTimeInterval(60))
+        let catalog = try Self.catalog()
+        fallbackScanCount = 0
+        store._test_grokLocalTokenScannerOverride = { historyDays in
+            fallbackScanCount += 1
+            return GrokLocalSessionScanner.summarize(
+                env: ["GROK_HOME": fixture.root.path],
+                lookbackDays: historyDays,
+                now: newTurnAt.addingTimeInterval(120),
+                modelsDevCatalog: catalog)
+                .toCostUsageTokenSnapshot(historyDays: historyDays)
+        }
+
+        await store.refreshProvider(.grok)
+        for _ in 0..<100 {
+            if store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77 {
+                break
+            }
+            await Task.yield()
+        }
+
+        #expect(fallbackScanCount == 1)
+        #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
+
+        await store.refreshProvider(.grok)
+        await Task.yield()
+
+        #expect(fallbackScanCount == 1)
     }
 
     @Test

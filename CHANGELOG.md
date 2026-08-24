@@ -211,9 +211,6 @@
 - Spend: add tokscale-compatible local readers for Cursor and Antigravity local history (#3113). Thanks @Yuxin-Qiao!
 - Added CHF (Swiss Franc) to the display currency options (#3149).
 
-### Usage & Spend
-- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and show the result as a clearly labeled, non-billed public xAI list-price estimate; OpenCodex xAI history remains token-only without request-time credential provenance (#3135). Thanks @olddonkey!
-
 ## 0.54.1 — 2026-08-21
 
 ### Highlights

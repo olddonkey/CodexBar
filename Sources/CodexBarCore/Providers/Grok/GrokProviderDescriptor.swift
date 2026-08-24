@@ -239,11 +239,11 @@ struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
                 return (snapshot, "grok-web", true)
             case .proxy:
                 let snapshot = try await GrokCreditsProxyFetcher.fetch(credentials: credentials)
-                return (snapshot, "grok-cli-proxy", true)
+                return try await Self.resolvingUnknownUsage(snapshot, credentials: credentials)
             case .proxyThenGrpc:
                 do {
                     let snapshot = try await GrokCreditsProxyFetcher.fetch(credentials: credentials)
-                    return (snapshot, "grok-cli-proxy", true)
+                    return try await Self.resolvingUnknownUsage(snapshot, credentials: credentials)
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let error as URLError where error.code == .cancelled {
@@ -253,6 +253,41 @@ struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
                     return (snapshot, "grok-web", true)
                 }
             }
+        }
+    }
+
+    /// A credits payload that carries a billing period but no usage value is a successful
+    /// response with unknown usage (#3157), and an unknown percent produces no rate window at
+    /// all. Plans whose credits payload never publishes `creditUsagePercent` would therefore
+    /// lose the usage bar entirely, so ask the grok.com bearer surface before that empty answer
+    /// ends the fetch. This stays on the auth-file token: no browser cookie import is involved.
+    /// grok.com remains best-effort — when it also has no percent, the proxy's period and plan
+    /// metadata are kept with usage still unknown.
+    static func resolvingUnknownUsage(
+        _ proxySnapshot: GrokWebBillingSnapshot,
+        credentials: GrokCredentials,
+        grpcBilling: GrokWebFetchStrategy.ProxyBillingFetch = {
+            try await GrokWebBillingFetcher.fetch(credentials: $0)
+        }) async throws -> (
+        snapshot: GrokWebBillingSnapshot,
+        sourceLabel: String,
+        authenticatedByAuthFile: Bool)
+    {
+        guard proxySnapshot.usedPercent == nil else {
+            return (proxySnapshot, "grok-cli-proxy", true)
+        }
+        do {
+            let grpcSnapshot = try await grpcBilling(credentials)
+            guard grpcSnapshot.usedPercent != nil else {
+                return (proxySnapshot, "grok-cli-proxy", true)
+            }
+            return (grpcSnapshot.completing(with: proxySnapshot), "grok-web", true)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw error
+        } catch {
+            return (proxySnapshot, "grok-cli-proxy", true)
         }
     }
 

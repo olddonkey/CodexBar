@@ -22,6 +22,16 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
             resetsAt: self.resetsAt,
             subscriptionTier: GrokPlan.displayName(from: raw) ?? self.subscriptionTier)
     }
+
+    /// Keep period and plan metadata a second billing surface did not publish. Usage percent
+    /// always stays with the surface that produced this snapshot, so an unknown percent is
+    /// never backfilled from another response.
+    func completing(with other: GrokWebBillingSnapshot) -> GrokWebBillingSnapshot {
+        GrokWebBillingSnapshot(
+            usedPercent: self.usedPercent,
+            resetsAt: self.resetsAt ?? other.resetsAt,
+            subscriptionTier: self.subscriptionTier ?? other.subscriptionTier)
+    }
 }
 
 public enum GrokWebBillingError: LocalizedError, Sendable {

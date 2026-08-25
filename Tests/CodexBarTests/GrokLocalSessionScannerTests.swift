@@ -494,7 +494,7 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         let summary = try self.summarize(fixture: fixture, now: turnAt.addingTimeInterval(120))
         let projected = try #require(summary.toCostUsageTokenSnapshot(
             historyDays: GrokLocalSessionScanner.maximumLookbackDays))
-        let warmMetrics = GrokLocalSessionScanner.parseCacheMetricsForTesting()
+        let warmMetrics = GrokLocalSessionScanner.parseCacheMetricsForTesting(pathPrefix: fixture.root.path)
         let usage = UsageSnapshot(
             primary: nil,
             secondary: nil,
@@ -514,7 +514,7 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         #expect(result?.historyDays == 7)
         #expect(result?.daily == projected.daily)
         #expect(result?.last30DaysTokens == projected.last30DaysTokens)
-        #expect(GrokLocalSessionScanner.parseCacheMetricsForTesting() == warmMetrics)
+        #expect(GrokLocalSessionScanner.parseCacheMetricsForTesting(pathPrefix: fixture.root.path) == warmMetrics)
     }
 
     @MainActor
@@ -576,7 +576,9 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
     func `missing remote snapshot scans and publishes local tokens then clears empty data`() async throws {
         let fixture = try self.makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let turnAt = try self.localDate(day: 20, hour: 19, minute: 30)
+        // The unstubbed publish path scans against the real clock, so anchor the fixture to now
+        // instead of a fixed calendar day that eventually falls outside the seven-day window.
+        let turnAt = Date().addingTimeInterval(-3600)
         let updates = fixture.session.appendingPathComponent("updates.jsonl")
         let firstTurn = self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 70, output: 7))
         try self.writeUpdates(

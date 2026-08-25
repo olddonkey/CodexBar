@@ -349,68 +349,6 @@ struct CostUsagePricingTests {
     }
 
     @Test
-    func `xai catalog changes use a separate fingerprint from Codex caches`() throws {
-        let first = try Self.modelsDevArtifact("""
-        {
-          "openai": {
-            "id": "openai",
-            "models": {
-              "gpt-5.6-sol": {
-                "id": "gpt-5.6-sol",
-                "cost": { "input": 5, "output": 30 }
-              }
-            }
-          },
-          "xai": {
-            "id": "xai",
-            "models": {
-              "grok-4.6": {
-                "id": "grok-4.6",
-                "cost": { "input": 2, "output": 6 }
-              }
-            }
-          }
-        }
-        """)
-        let xaiPriceChanged = try Self.modelsDevArtifact("""
-        {
-          "openai": {
-            "id": "openai",
-            "models": {
-              "gpt-5.6-sol": {
-                "id": "gpt-5.6-sol",
-                "cost": { "input": 5, "output": 30 }
-              }
-            }
-          },
-          "xai": {
-            "id": "xai",
-            "models": {
-              "grok-4.6": {
-                "id": "grok-4.6",
-                "cost": { "input": 3, "output": 7 }
-              }
-            }
-          }
-        }
-        """)
-
-        let firstCodexKey = CostUsagePricingKey.codex(modelsDevArtifact: first, formulaVersion: 1)
-        let changedCodexKey = CostUsagePricingKey.codex(modelsDevArtifact: xaiPriceChanged, formulaVersion: 1)
-        let firstXAIKey = CostUsagePricingKey.codex(
-            modelsDevArtifact: first,
-            formulaVersion: 1,
-            modelsDevProviderIDs: CostUsagePricing.xaiModelsDevProviderIDs)
-        let changedXAIKey = CostUsagePricingKey.codex(
-            modelsDevArtifact: xaiPriceChanged,
-            formulaVersion: 1,
-            modelsDevProviderIDs: CostUsagePricing.xaiModelsDevProviderIDs)
-
-        #expect(firstCodexKey == changedCodexKey)
-        #expect(firstXAIKey != changedXAIKey)
-    }
-
-    @Test
     func `codex pricing fingerprint records API fast USD definition`() {
         let fingerprint = CostUsagePricing.codexBuiltInPricingFingerprint()
 
@@ -488,9 +426,12 @@ struct CostUsagePricingTests {
             modelsDevCacheRoot: root)
 
         // Public API Fast rates are 2x Standard for GPT-5.6.
-        #expect(abs((sol ?? 0) - 2.02) < 1e-12)
-        #expect(abs((terra ?? 0) - 0.808) < 1e-12)
-        #expect(abs((luna ?? 0) - 0.0808) < 1e-12)
+        let expectedSol = 2.02
+        let expectedTerra = 0.808
+        let expectedLuna = 0.0808
+        #expect(abs((sol ?? 0) - expectedSol) < 1e-12)
+        #expect(abs((terra ?? 0) - expectedTerra) < 1e-12)
+        #expect(abs((luna ?? 0) - expectedLuna) < 1e-12)
     }
 
     @Test

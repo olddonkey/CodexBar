@@ -4,7 +4,7 @@ import Testing
 @testable import CodexBar
 
 @MainActor
-struct GrokTokenSnapshotProjectionTests {
+struct GrokTokenSnapshotProjectionTests: GrokLocalSessionScannerTestSupport {
     @Test
     func `menu projections reuse published grok session data after the session tree disappears`() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -14,20 +14,16 @@ struct GrokTokenSnapshotProjectionTests {
         for index in 0..<192 {
             let directory = sessions.appendingPathComponent("session-\(index)", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let file = directory.appendingPathComponent("signals.json")
-            try JSONSerialization.data(withJSONObject: [
-                "contextTokensUsed": 5,
-                "totalTokensBeforeCompaction": 2,
-                "primaryModelId": "grok-4.6",
-                "modelsUsed": ["grok-4.6"],
-            ]).write(to: file)
-            try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)
+            try self.writeUpdates(
+                [self.turn(timestamp: now, usage: self.singleModelUsage(input: 5, output: 2))],
+                to: directory.appendingPathComponent("updates.jsonl"),
+                modificationDate: now)
         }
 
         let store = Self.makeStore(environment: ["GROK_HOME": root.path])
         let published = try #require(await store.loadGrokLocalTokenSnapshot(historyDays: 30))
         #expect(published.last30DaysTokens == 1344)
-        #expect(published.last30DaysRequests == nil)
+        #expect(published.last30DaysRequests == 192)
 
         let providerSnapshot = UsageSnapshot(
             primary: nil,

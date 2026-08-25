@@ -330,3 +330,75 @@ struct GrokCostUsagePricingTests: GrokLocalSessionScannerTestSupport {
         #expect(projected365?.daily.map(\.date) == [olderDay, recentDay])
     }
 }
+
+extension GrokCostUsagePricingTests {
+    @Test
+    func `xai catalog changes use a separate fingerprint from Codex caches`() throws {
+        let first = try Self.modelsDevArtifact("""
+        {
+          "openai": {
+            "id": "openai",
+            "models": {
+              "gpt-5.6-sol": {
+                "id": "gpt-5.6-sol",
+                "cost": { "input": 5, "output": 30 }
+              }
+            }
+          },
+          "xai": {
+            "id": "xai",
+            "models": {
+              "grok-4.6": {
+                "id": "grok-4.6",
+                "cost": { "input": 2, "output": 6 }
+              }
+            }
+          }
+        }
+        """)
+        let xaiPriceChanged = try Self.modelsDevArtifact("""
+        {
+          "openai": {
+            "id": "openai",
+            "models": {
+              "gpt-5.6-sol": {
+                "id": "gpt-5.6-sol",
+                "cost": { "input": 5, "output": 30 }
+              }
+            }
+          },
+          "xai": {
+            "id": "xai",
+            "models": {
+              "grok-4.6": {
+                "id": "grok-4.6",
+                "cost": { "input": 3, "output": 7 }
+              }
+            }
+          }
+        }
+        """)
+
+        let firstCodexKey = CostUsagePricingKey.codex(modelsDevArtifact: first, formulaVersion: 1)
+        let changedCodexKey = CostUsagePricingKey.codex(modelsDevArtifact: xaiPriceChanged, formulaVersion: 1)
+        let firstXAIKey = CostUsagePricingKey.codex(
+            modelsDevArtifact: first,
+            formulaVersion: 1,
+            modelsDevProviderIDs: CostUsagePricing.xaiModelsDevProviderIDs)
+        let changedXAIKey = CostUsagePricingKey.codex(
+            modelsDevArtifact: xaiPriceChanged,
+            formulaVersion: 1,
+            modelsDevProviderIDs: CostUsagePricing.xaiModelsDevProviderIDs)
+
+        #expect(firstCodexKey == changedCodexKey)
+        #expect(firstXAIKey != changedXAIKey)
+    }
+
+    private static func modelsDevArtifact(_ json: String) throws -> ModelsDevCacheArtifact {
+        let catalog = try JSONDecoder().decode(ModelsDevCatalog.self, from: Data(json.utf8))
+        return ModelsDevCacheArtifact(
+            version: ModelsDevCache.artifactVersion,
+            fetchedAt: Date(timeIntervalSince1970: 0),
+            catalog: catalog)
+    }
+}

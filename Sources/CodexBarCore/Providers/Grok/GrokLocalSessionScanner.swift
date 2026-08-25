@@ -219,6 +219,8 @@ private final class GrokLocalSessionParseCache: @unchecked Sendable {
     private var entries: [String: Entry] = [:]
     private var fileDecodeCount = 0
     private var jsonDecodeCount = 0
+    private var fileDecodeCountByPath: [String: Int] = [:]
+    private var jsonDecodeCountByPath: [String: Int] = [:]
     private var accessOrdinal: UInt64 = 0
 
     func turns(
@@ -247,6 +249,9 @@ private final class GrokLocalSessionParseCache: @unchecked Sendable {
         defer { self.lock.unlock() }
         self.fileDecodeCount += 1
         self.jsonDecodeCount += decoded.jsonDecodeCount
+        let metricsPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        self.fileDecodeCountByPath[metricsPath, default: 0] += 1
+        self.jsonDecodeCountByPath[metricsPath, default: 0] += decoded.jsonDecodeCount
         guard decoded.cacheable else { return decoded.batch }
         if var entry = self.entries[path], entry.identity == identity {
             entry.accessOrdinal = self.nextAccessOrdinal()
@@ -292,12 +297,31 @@ private final class GrokLocalSessionParseCache: @unchecked Sendable {
             jsonDecodeCount: self.jsonDecodeCount)
     }
 
+    func metrics(pathPrefix: String) -> GrokLocalSessionParseCacheMetrics {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let resolvedPrefix = URL(fileURLWithPath: pathPrefix).resolvingSymlinksInPath().path
+        let descendantPrefix = resolvedPrefix.hasSuffix("/") ? resolvedPrefix : "\(resolvedPrefix)/"
+        let belongsToPrefix: (String) -> Bool = { path in
+            path == resolvedPrefix || path.hasPrefix(descendantPrefix)
+        }
+        return GrokLocalSessionParseCacheMetrics(
+            fileDecodeCount: self.fileDecodeCountByPath
+                .filter { belongsToPrefix($0.key) }
+                .reduce(0) { $0 + $1.value },
+            jsonDecodeCount: self.jsonDecodeCountByPath
+                .filter { belongsToPrefix($0.key) }
+                .reduce(0) { $0 + $1.value })
+    }
+
     func reset() {
         self.lock.lock()
         defer { self.lock.unlock() }
         self.entries.removeAll()
         self.fileDecodeCount = 0
         self.jsonDecodeCount = 0
+        self.fileDecodeCountByPath.removeAll()
+        self.jsonDecodeCountByPath.removeAll()
         self.accessOrdinal = 0
     }
 
@@ -619,6 +643,10 @@ public enum GrokLocalSessionScanner {
 
     static func parseCacheMetricsForTesting() -> GrokLocalSessionParseCacheMetrics {
         self.parseCache.metrics()
+    }
+
+    static func parseCacheMetricsForTesting(pathPrefix: String) -> GrokLocalSessionParseCacheMetrics {
+        self.parseCache.metrics(pathPrefix: pathPrefix)
     }
 
     static func resetParseCacheForTesting() {

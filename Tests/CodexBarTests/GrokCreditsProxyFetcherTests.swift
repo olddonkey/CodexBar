@@ -415,6 +415,25 @@ struct GrokCreditsProxyFetcherTests {
     }
 
     @Test
+    func `recovered usage preserves the authoritative credits period reset`() async throws {
+        let proxyReset = Date(timeIntervalSince1970: 1_800_000_003)
+        let grpcReset = Date(timeIntervalSince1970: 1_800_604_803)
+        let result = try await GrokOAuthFetchStrategy.resolvingUnknownUsage(
+            GrokWebBillingSnapshot(
+                usedPercent: nil,
+                resetsAt: proxyReset,
+                subscriptionTier: "SuperGrok Heavy"),
+            credentials: Self.credentials,
+            grpcBilling: { _ in
+                GrokWebBillingSnapshot(usedPercent: 20, resetsAt: grpcReset)
+            })
+
+        #expect(result.snapshot.usedPercent == 20)
+        #expect(result.snapshot.resetsAt == proxyReset)
+        #expect(result.snapshot.subscriptionTier == "SuperGrok Heavy")
+    }
+
+    @Test
     func `a known credits percent is never second-guessed by grok dot com`() async throws {
         let events = EventRecorder()
         let result = try await GrokOAuthFetchStrategy.resolvingUnknownUsage(

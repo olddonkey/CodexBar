@@ -41,7 +41,7 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
     func completing(with other: GrokWebBillingSnapshot) -> GrokWebBillingSnapshot {
         GrokWebBillingSnapshot(
             usedPercent: self.usedPercent,
-            resetsAt: self.resetsAt ?? other.resetsAt,
+            resetsAt: other.resetsAt ?? self.resetsAt,
             subscriptionTier: self.subscriptionTier ?? other.subscriptionTier,
             usedPercentIsWirePublished: self.usedPercentIsWirePublished)
     }

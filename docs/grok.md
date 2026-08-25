@@ -62,8 +62,10 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      bar for plans whose payload never publishes `creditUsagePercent`. Before that
      answer is accepted, CodexBar retries the grok.com bearer gRPC path (step 4,
      still without cookies) and adopts its percent when it has one, keeping the
-     credits period and plan metadata. When grok.com has no percent either, or the
-     retry fails, usage stays unknown — an absent value is never reported as 0%.
+     credits period and plan metadata, with the proxy's authoritative reset taking
+     precedence over a conflicting gRPC timestamp. When grok.com has no percent
+     either, or the retry fails, usage stays unknown and the card reports an explicit
+     unavailable-usage diagnostic — an absent value is never reported as 0%.
      Only a percentage that grok.com actually put on the wire is adopted: that
      parser reports its own no-usage-yet frame (a period with no percentage field)
      as 0, and promoting that reading would recreate the fabricated 0%. The retry

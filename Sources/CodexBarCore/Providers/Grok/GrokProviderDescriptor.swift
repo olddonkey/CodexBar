@@ -420,7 +420,8 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
             subscriptionTier: subscriptionTier ?? enrichedBilling.subscriptionTier)
         return self.makeResult(
             usage: snapshot.toUsageSnapshot(),
-            sourceLabel: sourceLabel)
+            sourceLabel: sourceLabel,
+            diagnostic: enrichedBilling.usedPercent == nil ? GrokStatusProbe.usageUnavailableMessage : nil)
     }
 
     func fetchWebBilling(

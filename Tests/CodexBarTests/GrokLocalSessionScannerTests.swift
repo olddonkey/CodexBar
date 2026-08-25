@@ -691,6 +691,95 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         #expect(fallbackScanCount == 2)
     }
 
+    @MainActor
+    @Test
+    func `preservable remote failure rescans and selects newer local tokens`() async throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let firstTurnAt = try self.localDate(day: 20, hour: 19, minute: 30)
+        let updates = fixture.session.appendingPathComponent("updates.jsonl")
+        let firstTurn = self.turn(
+            timestamp: firstTurnAt,
+            usage: self.singleModelUsage(input: 70, output: 7))
+        try self.writeUpdates(
+            [firstTurn],
+            to: updates,
+            modificationDate: firstTurnAt.addingTimeInterval(60))
+
+        let catalog = try Self.catalog()
+        let priorScanAt = firstTurnAt.addingTimeInterval(120)
+        let priorLocal = try #require(GrokLocalSessionScanner.summarize(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: GrokLocalSessionScanner.maximumLookbackDays,
+            now: priorScanAt,
+            modelsDevCatalog: catalog)
+            .toCostUsageTokenSnapshot(historyDays: GrokLocalSessionScanner.maximumLookbackDays))
+        let settings = testSettingsStore(suiteName: "GrokLocalSessionScannerTests-preservable-failure")
+        let metadata = ProviderDescriptorRegistry.descriptor(for: .grok).metadata
+        settings.setProviderEnabled(provider: .grok, metadata: metadata, enabled: true)
+        let store = UsageStore(
+            fetcher: UsageFetcher(environment: [:]),
+            browserDetection: BrowserDetection(cacheTTL: 0),
+            settings: settings,
+            startupBehavior: .testing,
+            environmentBase: ["GROK_HOME": fixture.root.path])
+        let retainedRemote = UsageSnapshot(
+            primary: nil,
+            secondary: nil,
+            costUsage: priorLocal,
+            updatedAt: priorScanAt)
+        store.snapshots[UsageProvider.grok.instanceID] = retainedRemote
+
+        let secondTurnAt = firstTurnAt.addingTimeInterval(180)
+        let secondTurn = self.turn(
+            timestamp: secondTurnAt,
+            usage: self.singleModelUsage(input: 20, output: 3))
+        try self.writeUpdates(
+            [firstTurn, secondTurn],
+            to: updates,
+            modificationDate: secondTurnAt.addingTimeInterval(60))
+        let refreshedScanAt = secondTurnAt.addingTimeInterval(120)
+        var scanCount = 0
+        store._test_grokLocalTokenScannerOverride = { historyDays in
+            scanCount += 1
+            return GrokLocalSessionScanner.summarize(
+                env: ["GROK_HOME": fixture.root.path],
+                lookbackDays: historyDays,
+                now: refreshedScanAt,
+                modelsDevCatalog: catalog)
+                .toCostUsageTokenSnapshot(historyDays: historyDays)
+        }
+        store._test_providerFetchOutcomeOverride = { provider in
+            #expect(provider == .grok)
+            return ProviderFetchOutcome(result: .failure(URLError(.timedOut)), attempts: [])
+        }
+
+        await store.refreshProvider(.grok)
+        for _ in 0..<100 {
+            if store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?
+                .snapshot?.last30DaysTokens == 100
+            {
+                break
+            }
+            await Task.yield()
+        }
+
+        #expect(scanCount == 1)
+        #expect(store.snapshots[UsageProvider.grok.instanceID]?.costUsage?.last30DaysTokens == 77)
+        let selected = store.tokenSnapshotForLiveProviderConsumer(
+            fromProviderSnapshot: store.snapshots[UsageProvider.grok.instanceID],
+            provider: .grok)
+        #expect(selected?.last30DaysTokens == 100)
+        #expect(selected?.updatedAt == refreshedScanAt)
+
+        await store.refreshProvider(.grok)
+        for _ in 0..<100 {
+            if scanCount >= 2 { break }
+            await Task.yield()
+        }
+        #expect(scanCount == 2)
+    }
+
     @Test
     func `local scan clock wins over a stale remote snapshot`() throws {
         let calendar = Calendar.current

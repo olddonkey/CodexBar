@@ -640,23 +640,22 @@ extension UsageStore {
         historyDays: Int? = nil)
         -> CostUsageTokenSnapshot?
     {
-        if let projected = self.tokenSnapshot(
+        let projected = self.tokenSnapshot(
             fromProviderSnapshot: snapshot,
             provider: provider,
             historyDays: historyDays)
-        {
-            return projected
-        }
         // Provider-specific by design: Grok's remote probe may fail while its local session scan still
-        // publishes a valid estimate. Keep this fallback scoped to live consumers so account override
-        // cards cannot inherit provider-level data from a different context.
+        // publishes a newer valid estimate. Keep this selection scoped to live consumers so account
+        // override cards cannot inherit provider-level data from a different context.
         guard provider == .grok,
               let published = self.tokenSnapshotPublicationForCurrentProviderConfig(for: provider)?.snapshot
-        else { return nil }
+        else { return projected }
         let windowDays = historyDays ?? self.settings.costUsageHistoryDays
-        return published.narrowed(
+        let narrowedPublished = published.narrowed(
             toHistoryDays: windowDays,
             calendar: self.settings.costUsageBucketCalendar)
+        guard let projected else { return narrowedPublished }
+        return narrowedPublished.updatedAt > projected.updatedAt ? narrowedPublished : projected
     }
 
     nonisolated static func tokenCostNoDataMessage(for provider: UsageProvider) -> String {

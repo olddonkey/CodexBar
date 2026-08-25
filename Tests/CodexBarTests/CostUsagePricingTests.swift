@@ -488,12 +488,9 @@ struct CostUsagePricingTests {
             modelsDevCacheRoot: root)
 
         // Public API Fast rates are 2x Standard for GPT-5.6.
-        let expectedSol = 2.02
-        let expectedTerra = 0.808
-        let expectedLuna = 0.0808
-        #expect(abs((sol ?? 0) - expectedSol) < 1e-12)
-        #expect(abs((terra ?? 0) - expectedTerra) < 1e-12)
-        #expect(abs((luna ?? 0) - expectedLuna) < 1e-12)
+        #expect(abs((sol ?? 0) - 2.02) < 1e-12)
+        #expect(abs((terra ?? 0) - 0.808) < 1e-12)
+        #expect(abs((luna ?? 0) - 0.0808) < 1e-12)
     }
 
     @Test

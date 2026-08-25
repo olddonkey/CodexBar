@@ -5,7 +5,7 @@ import Testing
 
 extension StatusMenuTests {
     @Test
-    func `grok live menu consumers use published local fallback without remote snapshot`() throws {
+    func `grok live menu consumers prefer newer published local tokens over stale remote tokens`() throws {
         self.disableMenuCardsForTesting()
         let settings = self.makeSettings()
         settings.statusChecksEnabled = false
@@ -44,6 +44,27 @@ extension StatusMenuTests {
                     modelBreakdowns: nil),
             ],
             updatedAt: now), provider: .grok)
+        let staleAt = now.addingTimeInterval(-60)
+        store.snapshots[UsageProvider.grok.instanceID] = UsageSnapshot(
+            primary: nil,
+            secondary: nil,
+            costUsage: CostUsageTokenSnapshot(
+                sessionTokens: 11,
+                sessionCostUSD: 0.01,
+                last30DaysTokens: 11,
+                last30DaysCostUSD: 0.01,
+                daily: [
+                    CostUsageDailyReport.Entry(
+                        date: formatter.string(from: staleAt),
+                        inputTokens: nil,
+                        outputTokens: nil,
+                        totalTokens: 11,
+                        costUSD: 0.01,
+                        modelsUsed: ["grok-4"],
+                        modelBreakdowns: nil),
+                ],
+                updatedAt: staleAt),
+            updatedAt: staleAt)
 
         let controller = StatusItemController(
             store: store,

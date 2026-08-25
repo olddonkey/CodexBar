@@ -2446,7 +2446,7 @@ struct ProviderArchitectureGatekeeperTests {
                 "codex@0",
                 "grok@3",
                 "grok@4",
-                "grok@7",
+                "grok@5",
                 "grok@9",
                 "grok@16",
                 "grok@17",

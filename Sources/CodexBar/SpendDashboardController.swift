@@ -293,13 +293,13 @@ enum SpendDashboardSource {
             // Provider-specific by design: Grok local session tokens are independent of the
             // remote billing snapshot, so a failed probe still publishes readable logs.
             if provider == .grok {
-                let grokSnapshot = if let usage = store.snapshot(for: .grok) {
-                    store.tokenSnapshot(
-                        fromProviderSnapshot: usage,
+                let remote = store.snapshot(for: .grok)
+                let publication = store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)
+                let grokSnapshot = if remote != nil || publication != nil {
+                    store.tokenSnapshotForLiveProviderConsumer(
+                        fromProviderSnapshot: remote,
                         provider: .grok,
                         historyDays: Self.scanDays)
-                } else if let published = store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok) {
-                    published.snapshot
                 } else {
                     await store.scanAndPublishGrokLocalTokenSnapshot(historyDays: Self.scanDays)
                 }
@@ -876,13 +876,10 @@ enum SpendDashboardSource {
     {
         // Provider-specific by design: a failed Grok probe publishes its detached local scan.
         if provider == .grok {
-            if let usage = store.snapshot(for: .grok) {
-                return store.tokenSnapshot(
-                    fromProviderSnapshot: usage,
-                    provider: .grok,
-                    historyDays: self.scanDays)
-            }
-            return publication.snapshot
+            return store.tokenSnapshotForLiveProviderConsumer(
+                fromProviderSnapshot: store.snapshot(for: .grok),
+                provider: .grok,
+                historyDays: self.scanDays)
         }
         if UsageStore.tokenCostRequiresProviderSnapshot(provider),
            let usage = store.snapshot(for: provider.instanceID),

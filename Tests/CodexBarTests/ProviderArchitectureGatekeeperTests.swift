@@ -3821,7 +3821,7 @@ struct ProviderArchitectureGatekeeperTests {
             anchor: "static let codexModelsDevProviderID = \"openai\"",
             expectedProviderIDs: ["deepseek", "openai", "opencode", "xai"],
             expectedReferenceCount: 5,
-            expectedReferenceFingerprint: ["openai@0", "deepseek@7", "openai@10", "opencode@11", "xai@14"],
+            expectedReferenceFingerprint: ["openai@0", "deepseek@3", "openai@6", "opencode@7", "xai@13"],
             reason: "This exact cost scanner dispatch selects a provider-owned transcript, cache, or pricing format."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/Vendored/CostUsage/CostUsagePricing.swift",

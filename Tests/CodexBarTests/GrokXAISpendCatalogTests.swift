@@ -8,10 +8,54 @@ struct GrokXAISpendCatalogTests {
     func `grok and xai publish through the snapshot-backed spend catalog`() {
         #expect(UsageStore.tokenCostRequiresProviderSnapshot(.grok))
         #expect(UsageStore.tokenCostRequiresProviderSnapshot(.xai))
-        #expect(ProviderDescriptorRegistry.descriptor(for: .grok).tokenCost.supportsTokenCost)
+        let grokTokenCost = ProviderDescriptorRegistry.descriptor(for: .grok).tokenCost
+        #expect(grokTokenCost.supportsTokenCost)
         #expect(ProviderDescriptorRegistry.descriptor(for: .xai).tokenCost.supportsTokenCost)
-        #expect(ProviderDescriptorRegistry.descriptor(for: .grok).tokenCost.noDataMessage() ==
+        #expect(grokTokenCost.noDataMessage() ==
             "Grok totals come from local Grok CLI session logs. Costs are public list-price estimates, not a bill.")
+        #expect(grokTokenCost.menuHintLines == [.estimate])
+        #expect(grokTokenCost.showsHintInProviderDetails)
+        #expect(grokTokenCost.estimateDisclaimer == "Public xAI list-price estimate · not a bill.")
+        #expect(grokTokenCost.chartEstimateDisclaimer == .estimate)
+    }
+
+    @MainActor
+    @Test
+    func `populated Grok surfaces disclose that list price is not a bill`() throws {
+        let now = Date(timeIntervalSince1970: 1_787_587_200)
+        let snapshot = CostUsageTokenSnapshot(
+            sessionTokens: 1100,
+            sessionCostUSD: 0.0023,
+            last30DaysTokens: 1100,
+            last30DaysCostUSD: 0.0023,
+            historyDays: 7,
+            costProvenance: .listPriceEstimate,
+            daily: [
+                CostUsageDailyReport.Entry(
+                    date: "2026-08-24",
+                    inputTokens: 1000,
+                    outputTokens: 100,
+                    totalTokens: 1100,
+                    costUSD: 0.0023,
+                    modelsUsed: ["grok-4.6"],
+                    modelBreakdowns: nil),
+            ],
+            updatedAt: now)
+        let section = try #require(UsageMenuCardView.Model.tokenUsageSection(
+            provider: .grok,
+            enabled: true,
+            comparisonPeriodsEnabled: false,
+            snapshot: snapshot,
+            error: nil))
+        let dashboard = SpendDashboardModel.build(
+            inputs: [.init(provider: .grok, displayName: "Grok", snapshot: snapshot)],
+            requestedDays: 7,
+            now: now)
+        let row = try #require(dashboard.groups.first?.providers.first)
+
+        #expect(section.hintLine == "Public xAI list-price estimate · not a bill.")
+        #expect(row.totalCost == 0.0023)
+        #expect(row.costDisclaimer == "Public xAI list-price estimate · not a bill.")
     }
 
     @Test(.enabled(

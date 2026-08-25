@@ -346,6 +346,12 @@ enum OpenCodexUsageAggregator {
         modelsDevCatalog: ModelsDevCatalog,
         customPricingOverlay: CostUsageCustomPricing) -> Double?
     {
+        // Provider-specific by design: token-only routes lack the request-time credential provenance needed to
+        // decide whether their traffic belongs to a subscription or an API bill. Keep their standalone OpenCodex
+        // rows token-only too instead of attaching a dollar amount that the subscription fan-out intentionally drops.
+        guard OpenCodexRouteDispatcher.route(provider: entry.provider, modelName: entry.model) != .tokenOnly else {
+            return nil
+        }
         guard entry.usageStatus == .reported || entry.usageStatus == .estimated else { return nil }
         let usage = entry.usage
         let hasTokenData = entry.resolvedTotalTokens != nil

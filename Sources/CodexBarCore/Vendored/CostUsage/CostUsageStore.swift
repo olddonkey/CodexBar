@@ -98,6 +98,7 @@ actor CostUsageStore {
         "c6c46a376ba16304", // 0.55.1 scheduler transition; rows and scoped retained reports are unchanged.
         "dd19ffa2dcfa8d47", // Current main before report-window scoping; persisted rows unchanged.
         "8050a4faf4fddb96", // PR base before retained-report persistence; parsed rows unchanged.
+        "64c5844b8ea170a6", // #3135 review fixes leave persisted Codex rows unchanged.
         "cfd84d13ad7d4cfa", // 0.55.x scan scheduling and progress bookkeeping; persisted rows unchanged.
         "3c984b655688593f", // xAI pricing and row-ownership evidence only; persisted Codex rows unchanged.
         "98da5914d2f6a9cd", // Pushed PR producer before retry signaling; persisted rows unchanged.

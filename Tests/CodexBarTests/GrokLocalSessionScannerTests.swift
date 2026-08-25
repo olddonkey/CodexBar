@@ -305,6 +305,41 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
     }
 
     @Test
+    func `session discovery stops at its entry budget and marks history incomplete`() throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sessionsRoot = fixture.session.deletingLastPathComponent()
+        let turnAt = try self.localDate(day: 20, hour: 17, minute: 45)
+        try self.writeUpdates(
+            [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 10, output: 1))],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: turnAt)
+        let secondSession = sessionsRoot.appendingPathComponent("session-b", isDirectory: true)
+        try FileManager.default.createDirectory(at: secondSession, withIntermediateDirectories: true)
+        try self.writeUpdates(
+            [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 20, output: 2))],
+            to: secondSession.appendingPathComponent("updates.jsonl"),
+            modificationDate: turnAt.addingTimeInterval(1))
+        let limits = GrokLocalSessionScanLimits(
+            maximumFileBytes: 64 * 1024,
+            maximumLineBytes: 64 * 1024,
+            maximumTurnsPerFile: 10,
+            maximumSessions: 10,
+            maximumDiscoveryEntries: 3)
+
+        let summary = try GrokLocalSessionScanner.summarize(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: 7,
+            now: turnAt.addingTimeInterval(120),
+            modelsDevCatalog: Self.catalog(),
+            scanLimits: limits)
+
+        #expect(summary.sessionCount == 1)
+        #expect(summary.totalTokens == 11 || summary.totalTokens == 22)
+        #expect(!summary.historyCoverageIsEstablished)
+    }
+
+    @Test
     func `parse cache caps retained session entries globally`() throws {
         GrokLocalSessionScanner.resetParseCacheForTesting()
         defer { GrokLocalSessionScanner.resetParseCacheForTesting() }
@@ -543,8 +578,9 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let turnAt = try self.localDate(day: 20, hour: 19, minute: 30)
         let updates = fixture.session.appendingPathComponent("updates.jsonl")
+        let firstTurn = self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 70, output: 7))
         try self.writeUpdates(
-            [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 70, output: 7))],
+            [firstTurn],
             to: updates,
             modificationDate: turnAt.addingTimeInterval(60))
         let settings = testSettingsStore(suiteName: "GrokLocalSessionScannerTests-detached")
@@ -563,27 +599,57 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
 
         var fallbackScanCount = 0
-        store._test_grokLocalTokenScannerOverride = { _ in
+        let catalog = try Self.catalog()
+        store._test_grokLocalTokenScannerOverride = { historyDays in
             fallbackScanCount += 1
-            return nil
+            return GrokLocalSessionScanner.summarize(
+                env: ["GROK_HOME": fixture.root.path],
+                lookbackDays: historyDays,
+                now: turnAt.addingTimeInterval(600),
+                modelsDevCatalog: catalog)
+                .toCostUsageTokenSnapshot(historyDays: historyDays)
         }
         store._test_providerFetchOutcomeOverride = { provider in
             #expect(provider == .grok)
             return ProviderFetchOutcome(result: .failure(URLError(.badServerResponse)), attempts: [])
         }
         await store.refreshProvider(.grok)
+        for _ in 0..<100 {
+            if fallbackScanCount >= 1 { break }
+            await Task.yield()
+        }
 
-        #expect(fallbackScanCount == 0)
+        #expect(fallbackScanCount == 1)
         #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
 
+        let secondTurnAt = turnAt.addingTimeInterval(180)
+        let secondTurn = self.turn(
+            timestamp: secondTurnAt,
+            usage: self.singleModelUsage(input: 20, output: 3))
+        try self.writeUpdates(
+            [firstTurn, secondTurn],
+            to: updates,
+            modificationDate: secondTurnAt.addingTimeInterval(60))
         await store.refreshProvider(.grok)
+        for _ in 0..<100 {
+            if fallbackScanCount >= 2,
+               store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 100
+            {
+                break
+            }
+            await Task.yield()
+        }
 
-        #expect(fallbackScanCount == 0)
-        #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
+        #expect(fallbackScanCount == 2)
+        #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 100)
+        for _ in 0..<100 {
+            if store.grokLocalTokenScanTask == nil { break }
+            await Task.yield()
+        }
+        #expect(store.grokLocalTokenScanTask == nil)
 
         store._test_grokLocalTokenScannerOverride = nil
         try FileManager.default.removeItem(at: updates)
-        store.clearTokenSnapshot(for: .grok)
         let empty = await store.scanAndPublishGrokLocalTokenSnapshot(historyDays: 7)
 
         #expect(empty == nil)
@@ -594,7 +660,6 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
             [self.turn(timestamp: newTurnAt, usage: self.singleModelUsage(input: 70, output: 7))],
             to: updates,
             modificationDate: newTurnAt.addingTimeInterval(60))
-        let catalog = try Self.catalog()
         fallbackScanCount = 0
         store._test_grokLocalTokenScannerOverride = { historyDays in
             fallbackScanCount += 1
@@ -618,9 +683,12 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
         #expect(store.tokenSnapshotPublicationForCurrentProviderConfig(for: .grok)?.snapshot?.last30DaysTokens == 77)
 
         await store.refreshProvider(.grok)
-        await Task.yield()
+        for _ in 0..<100 {
+            if fallbackScanCount >= 2 { break }
+            await Task.yield()
+        }
 
-        #expect(fallbackScanCount == 1)
+        #expect(fallbackScanCount == 2)
     }
 
     @Test

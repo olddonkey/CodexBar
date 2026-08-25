@@ -131,6 +131,7 @@ struct GrokLocalSessionScanLimits: Sendable, Equatable {
         maximumLineBytes: 1024 * 1024,
         maximumTurnsPerFile: 20000,
         maximumSessions: 256,
+        maximumDiscoveryEntries: 4096,
         maximumTotalBytes: 256 * 1024 * 1024,
         maximumTotalTurns: 100_000)
 
@@ -138,6 +139,7 @@ struct GrokLocalSessionScanLimits: Sendable, Equatable {
     let maximumLineBytes: Int
     let maximumTurnsPerFile: Int
     let maximumSessions: Int
+    let maximumDiscoveryEntries: Int
     let maximumTotalBytes: Int64
     let maximumTotalTurns: Int
 
@@ -146,6 +148,7 @@ struct GrokLocalSessionScanLimits: Sendable, Equatable {
         maximumLineBytes: Int,
         maximumTurnsPerFile: Int,
         maximumSessions: Int = 256,
+        maximumDiscoveryEntries: Int = 4096,
         maximumTotalBytes: Int64 = 256 * 1024 * 1024,
         maximumTotalTurns: Int = 100_000)
     {
@@ -153,6 +156,7 @@ struct GrokLocalSessionScanLimits: Sendable, Equatable {
         self.maximumLineBytes = max(1, maximumLineBytes)
         self.maximumTurnsPerFile = max(1, maximumTurnsPerFile)
         self.maximumSessions = max(1, maximumSessions)
+        self.maximumDiscoveryEntries = max(1, maximumDiscoveryEntries)
         self.maximumTotalBytes = max(1, maximumTotalBytes)
         self.maximumTotalTurns = max(1, maximumTotalTurns)
     }
@@ -163,6 +167,7 @@ struct GrokLocalSessionScanLimits: Sendable, Equatable {
             maximumLineBytes: self.maximumLineBytes,
             maximumTurnsPerFile: self.maximumTurnsPerFile,
             maximumSessions: self.maximumSessions,
+            maximumDiscoveryEntries: self.maximumDiscoveryEntries,
             maximumTotalBytes: self.maximumTotalBytes,
             maximumTotalTurns: self.maximumTotalTurns)
     }
@@ -496,7 +501,8 @@ public enum GrokLocalSessionScanner {
             root: root,
             fileManager: fileManager,
             lookbackCutoff: lookbackCutoff,
-            maximumCount: scanLimits.maximumSessions)
+            maximumCount: scanLimits.maximumSessions,
+            maximumDiscoveryEntries: scanLimits.maximumDiscoveryEntries)
         else {
             return self.emptySummary(now: now)
         }
@@ -649,7 +655,8 @@ public enum GrokLocalSessionScanner {
         root: URL,
         fileManager: FileManager,
         lookbackCutoff: Date,
-        maximumCount: Int) -> RecentSessionSelection?
+        maximumCount: Int,
+        maximumDiscoveryEntries: Int) -> RecentSessionSelection?
     {
         guard let rootEnum = fileManager.enumerator(
             at: root,
@@ -660,7 +667,11 @@ public enum GrokLocalSessionScanner {
         var sessionModificationDates: [String: Date] = [:]
         var historyCoverageIsEstablished = true
         let trimThreshold = maximumCount > Int.max / 2 ? Int.max : maximumCount * 2
-        while let url = rootEnum.nextObject() as? URL {
+        var discoveryEntryCount = 0
+        while discoveryEntryCount < maximumDiscoveryEntries,
+              let url = rootEnum.nextObject() as? URL
+        {
+            discoveryEntryCount += 1
             guard !Task.isCancelled else { return nil }
             let name = url.lastPathComponent
             guard name == "updates.jsonl" || name == "signals.json" else { continue }
@@ -675,6 +686,11 @@ public enum GrokLocalSessionScanner {
                 historyCoverageIsEstablished = false
                 self.trimRecentSessions(&sessionModificationDates, maximumCount: maximumCount)
             }
+        }
+        if discoveryEntryCount == maximumDiscoveryEntries {
+            // DirectoryEnumerator is lazy, so stopping here bounds both traversal and metadata I/O. Conservatively
+            // mark coverage incomplete at the boundary because there may be undiscovered sessions after this point.
+            historyCoverageIsEstablished = false
         }
         if sessionModificationDates.count > maximumCount {
             historyCoverageIsEstablished = false

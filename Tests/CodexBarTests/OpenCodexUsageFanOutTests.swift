@@ -54,12 +54,14 @@ struct OpenCodexUsageFanOutTests {
         #expect(snapshots[.codex]?.last30DaysTokens == 40)
     }
 
-    @Test func `bare xai model prices from the injected xai catalog`() throws {
+    @Test func `bare xai model remains token only with an injected xai catalog`() throws {
         let catalog = try Self.pricingCatalog()
         let snapshot = try Self.pricingSnapshot(provider: "xai", model: "grok-4.6", catalog: catalog)
-        let cost = try #require(snapshot.daily.first?.costUSD)
 
-        #expect(abs(cost - 0.0023) < 0.000000000001)
+        #expect(snapshot.daily.first?.totalTokens == 1100)
+        #expect(snapshot.daily.first?.costUSD == nil)
+        #expect(snapshot.daily.first?.unpricedRequestCount == 1)
+        #expect(snapshot.last30DaysCostUSD == nil)
     }
 
     @Test func `bare openai model keeps its pre qualification catalog price`() throws {

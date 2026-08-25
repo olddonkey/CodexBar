@@ -464,11 +464,7 @@ enum CostUsagePricing {
     ]
 
     static let codexModelsDevProviderID = "openai"
-    /// Provider IDs emitted by Codex-compatible clients that have matching entries in models.dev.
-    ///
-    /// The route prefix is part of the model identity for local usage estimates. Keep both the
-    /// client-facing aliases and their models.dev provider IDs here so pricing-cache fingerprints
-    /// invalidate when any supported route's rates change.
+    /// Provider IDs whose rates contribute to Codex pricing-cache fingerprints.
     static let codexModelsDevProviderIDs: Set<String> = [
         "deepseek",
         "kimi-coding",
@@ -477,8 +473,12 @@ enum CostUsagePricing {
         "opencode",
         "opencode-free",
         "opencode-go",
-        "xai",
     ]
+    /// xAI rates price native Grok session summaries, not Codex subscription history. Keep their fingerprint scope
+    /// separate so an xAI catalog update cannot invalidate the unrelated Codex session cache.
+    static let xaiModelsDevProviderIDs: Set<String> = ["xai"]
+    private static let codexCompatibleModelsDevProviderIDs = CostUsagePricing.codexModelsDevProviderIDs
+        .union(CostUsagePricing.xaiModelsDevProviderIDs)
     private static let claudeModelsDevProviderID = "anthropic"
 
     /// Returns the provider/model identities that may price a Codex model. Keep this mapping
@@ -491,7 +491,7 @@ enum CostUsagePricing {
             let routeID = String(trimmed[..<slash]).lowercased()
             let modelID = String(trimmed[trimmed.index(after: slash)...])
             guard !routeID.isEmpty, !modelID.isEmpty,
-                  self.codexModelsDevProviderIDs.contains(routeID)
+                  self.codexCompatibleModelsDevProviderIDs.contains(routeID)
             else { return [] }
 
             var providerIDs = [routeID]

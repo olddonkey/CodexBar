@@ -530,11 +530,6 @@ extension UsageStore {
         // Provider-specific by design: this fallback owns Grok's local session scan and publication.
         let provider = UsageProvider.grok
         let requestedHistoryDays = min(max(1, historyDays), GrokLocalSessionScanner.maximumLookbackDays)
-        if let published = self.tokenSnapshotPublicationForCurrentProviderConfig(for: provider)?.snapshot {
-            return published.narrowed(
-                toHistoryDays: requestedHistoryDays,
-                calendar: self.settings.costUsageBucketCalendar)
-        }
         if let task = self.grokLocalTokenScanTask {
             return await task.value?.narrowed(
                 toHistoryDays: requestedHistoryDays,

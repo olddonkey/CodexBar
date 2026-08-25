@@ -89,7 +89,11 @@ public enum GrokProviderDescriptor {
                 noDataMessage: {
                     "Grok totals come from local Grok CLI session logs. "
                         + "Costs are public list-price estimates, not a bill."
-                }),
+                },
+                menuHintLines: [.estimate],
+                showsHintInProviderDetails: true,
+                estimateDisclaimer: "Public xAI list-price estimate · not a bill.",
+                chartEstimateDisclaimer: .estimate),
             pace: ProviderPaceCapability(
                 resetWindowPace: .custom { window, now in
                     guard Self.primaryLabel(window: window, now: now) == "Weekly",

@@ -53,6 +53,12 @@ struct SpendDashboardModel: Equatable, Sendable {
         let coveredDayCount: Int
         let sourceKind: SourceKind
 
+        var costDisclaimer: String? {
+            // Provider-specific by design: Grok local-session dollars are list-price estimates, not billed spend.
+            guard self.provider == .grok, self.totalCost != nil else { return nil }
+            return UsageFormatter.costEstimateHint(provider: self.provider)
+        }
+
         init(
             id: String,
             rank: Int,

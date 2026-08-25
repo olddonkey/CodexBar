@@ -134,7 +134,7 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
    - Aggregates the recorded per-turn token usage, model breakdown, request count,
      and timestamps. Public xAI list prices provide a non-billed cost estimate.
    - Reads only a bounded tail of each growing JSONL file, caps individual records
-     and retained parsed turns, and reports history as incomplete if a bound is hit.
+     and retained parsed turns, bounds session-tree discovery, and reports history as incomplete if a bound is hit.
    - Uses `signals.json` only as a metadata fallback for sessions with no completed
      turns; context-window occupancy is never counted as consumed tokens.
 
@@ -264,7 +264,8 @@ CodexBar aggregates these into a `GrokLocalSessionSummary` (session count, actua
 tokens, last session time, primary model, and local-day buckets) over the requested
 window, up to 365 days. The reader streams a bounded tail of each file, limits a
 single JSONL record to 1 MiB, and retains at most 20,000 recent turns per file. A
-scan considers at most 256 recent sessions, 256 MiB, and 100,000 turns; the
+scan visits at most 4,096 session-tree entries, then considers at most 256 recent
+sessions, 256 MiB, and 100,000 turns; the
 process-wide LRU parse cache retains at most 64 files or 50,000 turns. If a bound
 drops history, the resulting snapshot is marked incomplete instead of presenting
 partial totals as complete. `signals.json` contributes model/session metadata only

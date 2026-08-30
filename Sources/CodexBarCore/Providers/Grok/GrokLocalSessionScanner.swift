@@ -406,13 +406,11 @@ public enum GrokLocalSessionScanner {
     /// scan waits for the initial attempt so a successful refresh is reflected in the snapshot that callers publish.
     public static func summarizeRequestingPricingRefresh(
         env: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default,
         lookbackDays: Int = defaultLookbackDays,
         now: Date = .init()) async -> GrokLocalSessionSummary
     {
         await self.summarizeRequestingPricingRefresh(
             env: env,
-            fileManager: fileManager,
             lookbackDays: lookbackDays,
             now: now,
             modelsDevCacheRoot: nil)
@@ -423,7 +421,6 @@ public enum GrokLocalSessionScanner {
 
     static func summarizeRequestingPricingRefresh(
         env: [String: String],
-        fileManager: FileManager = .default,
         lookbackDays: Int = defaultLookbackDays,
         now: Date = .init(),
         modelsDevCacheRoot: URL?,
@@ -437,15 +434,37 @@ public enum GrokLocalSessionScanner {
         } else {
             await requestPricingRefresh()
         }
-        return self.summarize(
-            env: env,
-            fileManager: fileManager,
-            lookbackDays: lookbackDays,
-            now: now,
-            pricing: PricingContext(
-                modelsDevCatalog: nil,
-                modelsDevCacheRoot: modelsDevCacheRoot,
-                customPricing: .empty))
+        let pricing = PricingContext(
+            modelsDevCatalog: nil,
+            modelsDevCacheRoot: modelsDevCacheRoot,
+            customPricing: .empty)
+        // A corpus scan is synchronous and can run for minutes. `CostUsageScanExecutor` exists to keep
+        // exactly that work off the cooperative pool, so this path must queue through it rather than
+        // calling the scanner inline and stalling menu work alongside other scans.
+        do {
+            return try await CostUsageScanExecutor.run { checkCancellation in
+                try checkCancellation()
+                let summary = Self.summarize(
+                    env: env,
+                    fileManager: .default,
+                    lookbackDays: lookbackDays,
+                    now: now,
+                    pricing: pricing)
+                try checkCancellation()
+                return summary
+            }
+        } catch {
+            // Callers rely on this fallback always returning a value. Report the window as
+            // unestablished so a cancelled scan is never presented as an authoritative zero.
+            return GrokLocalSessionSummary(
+                sessionCount: 0,
+                totalTokens: 0,
+                lastSessionAt: nil,
+                primaryModel: nil,
+                models: [],
+                scannedAt: now,
+                historyCoverageIsEstablished: false)
+        }
     }
 
     /// Walk `~/.grok/sessions/<encoded_cwd>/<session_id>/updates.jsonl` and aggregate completed turns.
@@ -520,7 +539,14 @@ public enum GrokLocalSessionScanner {
         var visitedCachePaths: Set<String> = []
         defer { self.parseCache.retainEntries(at: visitedCachePaths) }
         let calendar = Calendar.current
-        let lookbackCutoff = calendar.date(byAdding: .day, value: -max(0, lookbackDays), to: now) ?? now
+        // Consumers window this history with `narrowed(toHistoryDays:)`, which is an inclusive local-day
+        // range ending today. Derive the same boundary here so the first displayed day is scanned whole
+        // and no extra partial day is collected for consumers to discard.
+        let startOfToday = calendar.startOfDay(for: now)
+        let lookbackCutoff = calendar.date(
+            byAdding: .day,
+            value: -max(0, lookbackDays - 1),
+            to: startOfToday) ?? startOfToday
         guard let sessionSelection = self.recentSessionPaths(
             root: root,
             fileManager: fileManager,

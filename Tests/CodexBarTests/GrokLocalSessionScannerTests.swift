@@ -883,3 +883,115 @@ private final class GrokModelsDevTrackingTransport: ModelsDevHTTPTransport, @unc
 private enum GrokModelsDevTrackingError: Error {
     case failed
 }
+
+private final class GrokScanExecutorGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let releaseSignal = DispatchSemaphore(value: 0)
+    private var entered = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func enter() {
+        self.lock.lock()
+        let first = !self.entered
+        self.entered = true
+        let waiter = self.waiter
+        self.waiter = nil
+        self.lock.unlock()
+        waiter?.resume()
+        if first { _ = self.releaseSignal.wait(timeout: .now() + 5) }
+    }
+
+    func waitUntilInside() async {
+        await withCheckedContinuation { continuation in
+            self.lock.lock()
+            let entered = self.entered
+            if !entered { self.waiter = continuation }
+            self.lock.unlock()
+            if entered { continuation.resume() }
+        }
+    }
+
+    func release() {
+        self.releaseSignal.signal()
+    }
+}
+
+private actor GrokScanCompletionFlag {
+    private(set) var isFinished = false
+    func markFinished() {
+        self.isFinished = true
+    }
+}
+
+extension GrokLocalSessionScannerTests {
+    /// The refreshable entry point used to call the synchronous corpus scanner inline, so its callers
+    /// ran a potentially multi-minute scan on the cooperative pool. It must queue through the shared
+    /// serial executor instead; occupying that executor therefore has to hold this scan back.
+    @Test
+    func `refreshable scan queues through the shared corpus scan executor`() async throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let cacheRoot = fixture.root.appendingPathComponent("models-dev", isDirectory: true)
+        try FileManager.default.createDirectory(at: cacheRoot, withIntermediateDirectories: true)
+        let now = try self.localDate(day: 10, hour: 12)
+        let turnAt = try self.localDate(day: 10, hour: 9)
+        try self.writeUpdates(
+            [self.turn(timestamp: turnAt, usage: self.singleModelUsage(input: 100, output: 10))],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: turnAt.addingTimeInterval(60))
+
+        let gate = GrokScanExecutorGate()
+        let blocker = Task { try await CostUsageScanExecutor.run { _ in gate.enter() } }
+        await gate.waitUntilInside()
+
+        let finished = GrokScanCompletionFlag()
+        let scan = Task { () -> GrokLocalSessionSummary in
+            let summary = await GrokLocalSessionScanner.summarizeRequestingPricingRefresh(
+                env: ["GROK_HOME": fixture.root.path],
+                lookbackDays: 7,
+                now: now,
+                modelsDevCacheRoot: cacheRoot) {}
+            await finished.markFinished()
+            return summary
+        }
+        // An inline scan of this fixture finishes in microseconds, so poll well past that: staying
+        // unfinished for the whole window is only possible if the scan is queued behind the blocker.
+        for _ in 0..<60 {
+            if await finished.isFinished { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(await finished.isFinished == false)
+
+        gate.release()
+        try await blocker.value
+        let summary = await scan.value
+        #expect(summary.totalTokens == 110)
+    }
+
+    /// Consumers render this history as an inclusive local-day window. Deriving the scan cutoff from the
+    /// current instant instead collected a partial extra day that those consumers then discarded.
+    @Test
+    func `history window starts at the first local day rather than the current instant`() throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let now = try self.localDate(day: 10, hour: 12)
+        let firstDisplayedDay = try self.localDate(day: 8, hour: 3)
+        let dayBeforeWindow = try self.localDate(day: 7, hour: 20)
+        try self.writeUpdates(
+            [
+                self.turn(timestamp: dayBeforeWindow, usage: self.singleModelUsage(input: 500, output: 50)),
+                self.turn(timestamp: firstDisplayedDay, usage: self.singleModelUsage(input: 100, output: 10)),
+            ],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: now.addingTimeInterval(-60))
+
+        let summary = GrokLocalSessionScanner.summarize(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: 3,
+            now: now)
+
+        // A three-day window ending today covers days 8-10; the day-7 turn is outside it.
+        #expect(summary.totalTokens == 110)
+        #expect(summary.daily.count == 1)
+    }
+}

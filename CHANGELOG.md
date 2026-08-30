@@ -115,6 +115,9 @@
 - Distinguish OpenCode-backed Codex OAuth quota from unsupported OpenCode session cost imports, preserving provider and account boundaries (investigated alongside #3273). Thanks @pedrommone!
 - Document existing z.ai credit quotas and explain how to configure independent provider widgets.
 
+### Usage & Spend
+- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and show the result as a clearly labeled, non-billed public xAI list-price estimate; OpenCodex xAI history remains token-only without request-time credential provenance (#3135). Thanks @olddonkey!
+
 ## 0.56.0 — 2026-08-28
 
 ### Added
@@ -142,9 +145,6 @@
 
 ### Security
 - CLI install: isolate helper validation and administrator commands from inherited shell functions and startup hooks, while preserving the existing approval flow and install locations (#3205, #3217).
-
-### Usage & Spend
-- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and show the result as a clearly labeled, non-billed public xAI list-price estimate; OpenCodex xAI history remains token-only without request-time credential provenance (#3135). Thanks @olddonkey!
 
 ## 0.55.1 — 2026-08-25
 

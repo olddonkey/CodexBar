@@ -12,16 +12,18 @@ struct GrokXAISpendCatalogTests {
         #expect(grokTokenCost.supportsTokenCost)
         #expect(ProviderDescriptorRegistry.descriptor(for: .xai).tokenCost.supportsTokenCost)
         #expect(grokTokenCost.noDataMessage() ==
-            "Grok totals come from local Grok CLI session logs. Costs are public list-price estimates, not a bill.")
+            "Grok totals come from local Grok CLI session logs. Costs use the spend the CLI recorded, "
+            + "or public list prices where it recorded none. Neither is a bill.")
         #expect(grokTokenCost.menuHintLines == [.estimate])
         #expect(grokTokenCost.showsHintInProviderDetails)
-        #expect(grokTokenCost.estimateDisclaimer == "Public xAI list-price estimate · not a bill.")
+        #expect(grokTokenCost
+            .estimateDisclaimer == "Grok CLI-recorded spend, list price where unrecorded · not a bill.")
         #expect(grokTokenCost.chartEstimateDisclaimer == .estimate)
     }
 
     @MainActor
     @Test
-    func `populated Grok surfaces disclose that list price is not a bill`() throws {
+    func `populated Grok surfaces disclose that the cost is not a bill`() throws {
         let now = Date(timeIntervalSince1970: 1_787_587_200)
         let snapshot = CostUsageTokenSnapshot(
             sessionTokens: 1100,
@@ -53,9 +55,9 @@ struct GrokXAISpendCatalogTests {
             now: now)
         let row = try #require(dashboard.groups.first?.providers.first)
 
-        #expect(section.hintLine == "Public xAI list-price estimate · not a bill.")
+        #expect(section.hintLine == "Grok CLI-recorded spend, list price where unrecorded · not a bill.")
         #expect(row.totalCost == 0.0023)
-        #expect(row.costDisclaimer == "Public xAI list-price estimate · not a bill.")
+        #expect(row.costDisclaimer == "Grok CLI-recorded spend, list price where unrecorded · not a bill.")
     }
 
     @Test(.enabled(
@@ -76,7 +78,13 @@ struct GrokXAISpendCatalogTests {
         #expect(grokRow.totalTokens == snapshot.last30DaysTokens)
         #expect(model.tokenActivity.contains { $0.totalTokens != nil })
         #expect(snapshot.historyDays == SpendDashboardSource.scanDays)
-        #expect(snapshot.costProvenance == .listPriceEstimate)
+        // Which source priced the corpus depends on what the CLI recorded, so assert the contract that
+        // holds for every corpus: a priced window names a source, an unpriced one claims none.
+        if pricedDayCount > 0 {
+            #expect([.vendorMetered, .mixed, .listPriceEstimate].contains(snapshot.costProvenance))
+        } else {
+            #expect(snapshot.costProvenance == .unknown)
+        }
         #expect(pricedDayCount <= tokenDayCount)
         if tokenDayCount > 0 {
             if pricedDayCount > 0 {

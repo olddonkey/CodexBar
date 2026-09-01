@@ -61,6 +61,8 @@ public struct GrokLocalSessionSummary: Sendable {
     public let daily: [GrokLocalDailyBucket]
     public let scannedAt: Date
     public let historyCoverageIsEstablished: Bool
+    /// Which source produced the daily costs: the CLI's recorded spend, the public card, or both.
+    public let costProvenance: CostProvenance
 
     public init(
         sessionCount: Int,
@@ -70,7 +72,8 @@ public struct GrokLocalSessionSummary: Sendable {
         models: [String],
         daily: [GrokLocalDailyBucket] = [],
         scannedAt: Date = .init(),
-        historyCoverageIsEstablished: Bool = true)
+        historyCoverageIsEstablished: Bool = true,
+        costProvenance: CostProvenance = .listPriceEstimate)
     {
         self.sessionCount = sessionCount
         self.totalTokens = totalTokens
@@ -80,9 +83,11 @@ public struct GrokLocalSessionSummary: Sendable {
         self.daily = daily
         self.scannedAt = scannedAt
         self.historyCoverageIsEstablished = historyCoverageIsEstablished
+        self.costProvenance = costProvenance
     }
 
-    /// Local tokens priced at public API list rates; this is an estimate, not a Grok bill.
+    /// Local turns priced from the spend the Grok CLI recorded, falling back to public API list rates for
+    /// entries it did not record. Neither figure is a Grok bill.
     public func toCostUsageTokenSnapshot(historyDays: Int) -> CostUsageTokenSnapshot? {
         let entries = self.daily.map { bucket in
             CostUsageDailyReport.Entry(
@@ -114,7 +119,7 @@ public struct GrokLocalSessionSummary: Sendable {
             last30DaysRequests: self.daily.reduce(0) { $0 + $1.requestCount },
             historyDays: historyDays,
             historyCoverageIsEstablished: self.historyCoverageIsEstablished,
-            costProvenance: .listPriceEstimate,
+            costProvenance: self.costProvenance,
             daily: entries,
             updatedAt: self.scannedAt)
     }
@@ -181,6 +186,8 @@ private struct GrokParsedTokenUsage: Sendable {
     let cacheCreationTokens: Int
     let reasoningTokens: Int
     let modelCalls: Int?
+    /// Spend the Grok CLI recorded for this usage, in ticks. `nil` when the record omits it or reports 0.
+    let costUsdTicks: Int?
 }
 
 private struct GrokParsedTurn: Sendable {
@@ -396,7 +403,20 @@ public enum GrokLocalSessionScanner {
     private struct ScanAggregation {
         var modelCounts: [String: Int] = [:]
         var daily: [String: MutableDailyBucket] = [:]
+        /// Whether any entry was priced from the CLI's recorded spend, and whether any fell back to the
+        /// public card. Both can be true, which publishes a mixed window rather than claiming either source.
+        var sawRecordedCost = false
+        var sawEstimatedCost = false
     }
+
+    /// Divisor that turns `costUsdTicks` into USD.
+    ///
+    /// Established on two independent corpora: 934 turns in #3345 and the 6-turn corpus behind this branch's
+    /// gated proof, both landing on `1e10` to four decimals. An earlier reading of this branch used `1e9`,
+    /// which happened to equal `1.7 x` the public card on a sample drawn entirely from an xAI promotional
+    /// window; the field carries that promotional rate, so reconstructing the same turns from the public card
+    /// overstated them by 5.9x.
+    static let costUsdTicksPerUSD = 1e10
 
     private static let parseCache = GrokLocalSessionParseCache()
     private static let turnCompletedNeedle = Data("turn_completed".utf8)
@@ -463,7 +483,8 @@ public enum GrokLocalSessionScanner {
                 primaryModel: nil,
                 models: [],
                 scannedAt: now,
-                historyCoverageIsEstablished: false)
+                historyCoverageIsEstablished: false,
+                costProvenance: .unknown)
         }
     }
 
@@ -651,7 +672,18 @@ public enum GrokLocalSessionScanner {
             models: sortedModels,
             daily: buckets,
             scannedAt: now,
-            historyCoverageIsEstablished: historyCoverageIsEstablished)
+            historyCoverageIsEstablished: historyCoverageIsEstablished,
+            costProvenance: Self.provenance(aggregation: aggregation))
+    }
+
+    /// A window that priced nothing has no provenance to claim; one that used both sources is mixed.
+    private static func provenance(aggregation: ScanAggregation) -> CostProvenance {
+        switch (aggregation.sawRecordedCost, aggregation.sawEstimatedCost) {
+        case (true, true): .mixed
+        case (true, false): .vendorMetered
+        case (false, true): .listPriceEstimate
+        case (false, false): .unknown
+        }
     }
 
     public static func summarizeOffMainThread(
@@ -694,7 +726,8 @@ public enum GrokLocalSessionScanner {
             lastSessionAt: nil,
             primaryModel: nil,
             models: [],
-            scannedAt: now)
+            scannedAt: now,
+            costProvenance: .unknown)
     }
 
     private static func fileIdentity(for url: URL) -> FileIdentity? {
@@ -873,7 +906,16 @@ public enum GrokLocalSessionScanner {
             cachedReadTokens: max(0, self.integer(object["cachedReadTokens"]) ?? 0),
             cacheCreationTokens: max(0, self.integer(object["cacheCreationTokens"]) ?? 0),
             reasoningTokens: max(0, self.integer(object["reasoningTokens"]) ?? 0),
-            modelCalls: self.integer(object["modelCalls"]))
+            modelCalls: self.integer(object["modelCalls"]),
+            costUsdTicks: self.recordedCostTicks(object["costUsdTicks"]))
+    }
+
+    /// `costUsdTicks` is the spend the CLI recorded for a turn, already carrying its price tier and any
+    /// promotional rate. A record that omits the field, or reports 0 as a small share of turns do, has no
+    /// recorded spend; those entries fall back to the public card.
+    private static func recordedCostTicks(_ value: Any?) -> Int? {
+        guard let ticks = self.integer(value), ticks > 0 else { return nil }
+        return ticks
     }
 
     private static func integer(_ value: Any?) -> Int? {
@@ -927,7 +969,15 @@ public enum GrokLocalSessionScanner {
         if turn.modelUsage.isEmpty {
             let requests = self.requestCount(for: turn.usage)
             bucket.requestCount += requests
-            bucket.unpricedRequestCount += requests
+            // A turn with no per-model attribution still carries its own recorded spend; only the
+            // list-price path needs a SKU, so an unattributed turn is unpriced without recorded ticks.
+            if let recorded = turn.usage.costUsdTicks {
+                bucket.costUSD += Double(recorded) / Self.costUsdTicksPerUSD
+                bucket.hasPricedCost = true
+                aggregation.sawRecordedCost = true
+            } else {
+                bucket.unpricedRequestCount += requests
+            }
         }
         for (sku, usage) in turn.modelUsage {
             let requests = self.requestCount(for: usage)
@@ -943,7 +993,16 @@ public enum GrokLocalSessionScanner {
             breakdown.totalTokens += usage.totalTokens
             breakdown.requestCount += requests
 
-            if let cost = self.costUSD(
+            // The CLI's recorded spend already carries the price tier and any promotional rate, so it wins
+            // over a reconstruction whenever the record has it. The public card stays the fallback.
+            if let recorded = usage.costUsdTicks {
+                let cost = Double(recorded) / Self.costUsdTicksPerUSD
+                breakdown.costUSD += cost
+                breakdown.hasPricedCost = true
+                bucket.costUSD += cost
+                bucket.hasPricedCost = true
+                aggregation.sawRecordedCost = true
+            } else if let cost = self.costUSD(
                 sku: sku,
                 usage: usage,
                 pricingDate: turn.timestamp,
@@ -953,6 +1012,8 @@ public enum GrokLocalSessionScanner {
                 breakdown.hasPricedCost = true
                 bucket.costUSD += cost
                 bucket.hasPricedCost = true
+                bucket.estimatedRequestCount += requests
+                aggregation.sawEstimatedCost = true
             } else {
                 bucket.unpricedRequestCount += requests
             }

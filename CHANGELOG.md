@@ -116,7 +116,7 @@
 - Document existing z.ai credit quotas and explain how to configure independent provider widgets.
 
 ### Usage & Spend
-- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and show the result as a clearly labeled, non-billed public xAI list-price estimate; OpenCodex xAI history remains token-only without request-time credential provenance (#3135). Thanks @olddonkey!
+- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and price it from the spend the CLI recorded, falling back to clearly labeled public xAI list prices where it recorded none; OpenCodex xAI history remains token-only without request-time credential provenance (#3135, #3345). Thanks @olddonkey and @initH271!
 
 ## 0.56.0 — 2026-08-28
 

@@ -56,13 +56,18 @@ extension GrokLocalSessionScannerTestSupport {
         ]
     }
 
-    func singleModelUsage(input: Int, output: Int) -> [String: Any] {
+    func singleModelUsage(input: Int, output: Int, costUsdTicks: Int? = nil) -> [String: Any] {
         self.usage(
             input: input,
             output: output,
             modelCalls: 1,
+            costUsdTicks: costUsdTicks,
             modelUsage: [
-                "grok-4.6-build": self.modelUsage(input: input, output: output, modelCalls: 1),
+                "grok-4.6-build": self.modelUsage(
+                    input: input,
+                    output: output,
+                    modelCalls: 1,
+                    costUsdTicks: costUsdTicks),
             ])
     }
 
@@ -73,6 +78,7 @@ extension GrokLocalSessionScannerTestSupport {
         cacheCreation: Int = 0,
         reasoning: Int = 0,
         modelCalls: Int?,
+        costUsdTicks: Int? = nil,
         modelUsage: [String: [String: Any]]) -> [String: Any]
     {
         var result: [String: Any] = [
@@ -84,10 +90,14 @@ extension GrokLocalSessionScannerTestSupport {
             "reasoningTokens": reasoning,
             "modelUsage": modelUsage,
             "numTurns": modelCalls ?? 1,
-            "costUsdTicks": 999_999_999_999,
         ]
         if let modelCalls {
             result["modelCalls"] = modelCalls
+        }
+        // Omitted by default so the existing suites keep exercising the public-card fallback; a test that
+        // wants the recorded-spend path asks for it explicitly.
+        if let costUsdTicks {
+            result["costUsdTicks"] = costUsdTicks
         }
         return result
     }
@@ -98,7 +108,8 @@ extension GrokLocalSessionScannerTestSupport {
         cachedRead: Int = 0,
         cacheCreation: Int = 0,
         reasoning: Int = 0,
-        modelCalls: Int?) -> [String: Any]
+        modelCalls: Int?,
+        costUsdTicks: Int? = nil) -> [String: Any]
     {
         var result: [String: Any] = [
             "inputTokens": input,
@@ -107,10 +118,12 @@ extension GrokLocalSessionScannerTestSupport {
             "cachedReadTokens": cachedRead,
             "cacheCreationTokens": cacheCreation,
             "reasoningTokens": reasoning,
-            "costUsdTicks": 999_999_999_999,
         ]
         if let modelCalls {
             result["modelCalls"] = modelCalls
+        }
+        if let costUsdTicks {
+            result["costUsdTicks"] = costUsdTicks
         }
         return result
     }

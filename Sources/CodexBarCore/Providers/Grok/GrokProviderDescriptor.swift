@@ -87,12 +87,12 @@ public enum GrokProviderDescriptor {
             tokenCost: ProviderTokenCostConfig(
                 supportsTokenCost: true,
                 noDataMessage: {
-                    "Grok totals come from local Grok CLI session logs. "
-                        + "Costs are public list-price estimates, not a bill."
+                    "Grok totals come from local Grok CLI session logs. Costs use the spend the CLI "
+                        + "recorded, or public list prices where it recorded none. Neither is a bill."
                 },
                 menuHintLines: [.estimate],
                 showsHintInProviderDetails: true,
-                estimateDisclaimer: "Public xAI list-price estimate · not a bill.",
+                estimateDisclaimer: "Grok CLI-recorded spend, list price where unrecorded · not a bill.",
                 chartEstimateDisclaimer: .estimate),
             pace: ProviderPaceCapability(
                 resetWindowPace: .custom { window, now in

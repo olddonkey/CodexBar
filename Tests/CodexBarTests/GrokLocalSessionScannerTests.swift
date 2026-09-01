@@ -476,7 +476,9 @@ struct GrokLocalSessionScannerTests: GrokLocalSessionScannerTestSupport {
 
         #expect(day.requestCount == 1)
         #expect(day.unpricedRequestCount == 0)
-        #expect(snapshot.daily.first?.coverageCounts.priced == 1)
+        // The fixture records no spend, so the request is covered by the public-card fallback.
+        #expect(snapshot.daily.first?.coverageCounts.estimated == 1)
+        #expect(snapshot.daily.first?.coverageCounts.priced == 0)
     }
 
     @MainActor
@@ -993,5 +995,88 @@ extension GrokLocalSessionScannerTests {
         // A three-day window ending today covers days 8-10; the day-7 turn is outside it.
         #expect(summary.totalTokens == 110)
         #expect(summary.daily.count == 1)
+    }
+
+    /// The CLI's own figure already carries the price tier and any promotional rate, so it must win over a
+    /// public-card reconstruction. The fixture's tokens would reconstruct to a very different number.
+    @Test
+    func `recorded spend prices the turn instead of the public card`() throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let turnAt = try self.localDate(day: 20, hour: 12)
+        try self.writeUpdates(
+            [self.turn(
+                timestamp: turnAt,
+                usage: self.singleModelUsage(input: 1_000_000, output: 100_000, costUsdTicks: 3_708_179_400))],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: turnAt.addingTimeInterval(60))
+
+        let summary = try self.summarize(fixture: fixture, now: turnAt.addingTimeInterval(120))
+        let day = try #require(summary.daily.first)
+        let snapshot = try #require(summary.toCostUsageTokenSnapshot(historyDays: 7))
+
+        #expect(abs((day.costUSD ?? 0) - 0.37081794) < 0.000000000001)
+        #expect(day.estimatedRequestCount == 0)
+        #expect(day.unpricedRequestCount == 0)
+        #expect(summary.costProvenance == .vendorMetered)
+        #expect(snapshot.costProvenance == .vendorMetered)
+        #expect(snapshot.daily.first?.coverageCounts.priced == 1)
+        #expect(snapshot.daily.first?.coverageCounts.estimated == 0)
+        // The same tokens on the public tier-1 card come to $2.60, so the recorded figure is not a
+        // reconstruction that happens to agree.
+        let breakdown = try #require(day.modelBreakdowns.first)
+        #expect(abs((breakdown.costUSD ?? 0) - 0.37081794) < 0.000000000001)
+    }
+
+    /// A record that reports 0 has no recorded spend to read, which is how a small share of turns arrive.
+    @Test
+    func `a zero tick record falls back to the public card`() throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let turnAt = try self.localDate(day: 20, hour: 12)
+        try self.writeUpdates(
+            [self.turn(
+                timestamp: turnAt,
+                usage: self.singleModelUsage(input: 1000, output: 100, costUsdTicks: 0))],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: turnAt.addingTimeInterval(60))
+
+        let summary = try self.summarize(fixture: fixture, now: turnAt.addingTimeInterval(120))
+        let day = try #require(summary.daily.first)
+
+        #expect(day.estimatedRequestCount == 1)
+        #expect((day.costUSD ?? 0) > 0)
+        #expect(summary.costProvenance == .listPriceEstimate)
+    }
+
+    /// A corpus that uses both sources must say so rather than claiming either one for the whole window.
+    @Test
+    func `a corpus mixing recorded and reconstructed turns publishes a mixed window`() throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let recordedAt = try self.localDate(day: 20, hour: 12)
+        let reconstructedAt = try self.localDate(day: 21, hour: 12)
+        try self.writeUpdates(
+            [
+                self.turn(
+                    timestamp: recordedAt,
+                    usage: self.singleModelUsage(input: 1000, output: 100, costUsdTicks: 1_000_000_000)),
+                self.turn(
+                    timestamp: reconstructedAt,
+                    usage: self.singleModelUsage(input: 1000, output: 100)),
+            ],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: reconstructedAt.addingTimeInterval(60))
+
+        let summary = try self.summarize(fixture: fixture, now: reconstructedAt.addingTimeInterval(120))
+        let snapshot = try #require(summary.toCostUsageTokenSnapshot(historyDays: 7))
+        let recordedDay = try #require(summary.daily.first { $0.estimatedRequestCount == 0 })
+        let reconstructedDay = try #require(summary.daily.first { $0.estimatedRequestCount == 1 })
+
+        #expect(summary.costProvenance == .mixed)
+        #expect(snapshot.costProvenance == .mixed)
+        #expect(abs((recordedDay.costUSD ?? 0) - 0.1) < 0.000000000001)
+        #expect((reconstructedDay.costUSD ?? 0) > 0)
+        #expect(abs((reconstructedDay.costUSD ?? 0) - 0.1) > 0.000000000001)
     }
 }

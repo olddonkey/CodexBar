@@ -6,7 +6,7 @@ import Testing
 @Suite(.serialized)
 struct GrokCostUsagePricingTests: GrokLocalSessionScannerTestSupport {
     @Test
-    func `completed turn reports exact tokens and public list price`() throws {
+    func `a turn without recorded spend reports exact tokens and the public list price`() throws {
         let fixture = try self.makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let turnAt = try self.localDate(day: 20, hour: 12)
@@ -43,7 +43,7 @@ struct GrokCostUsagePricingTests: GrokLocalSessionScannerTestSupport {
         #expect(day.reasoningTokens == 20)
         #expect(day.totalTokens == 1100)
         #expect(day.requestCount == 1)
-        #expect(day.estimatedRequestCount == 0)
+        #expect(day.estimatedRequestCount == 1)
         #expect(abs((day.costUSD ?? 0) - expectedCost) < 0.000000000001)
 
         let snapshot = try #require(summary.toCostUsageTokenSnapshot(historyDays: 7))
@@ -51,9 +51,9 @@ struct GrokCostUsagePricingTests: GrokLocalSessionScannerTestSupport {
         #expect(abs((snapshot.sessionCostUSD ?? 0) - expectedCost) < 0.000000000001)
         #expect(abs((snapshot.last30DaysCostUSD ?? 0) - expectedCost) < 0.000000000001)
         #expect(snapshot.costProvenance == .listPriceEstimate)
-        #expect(snapshot.daily.first?.estimatedRequestCount == nil)
-        #expect(snapshot.daily.first?.coverageCounts.priced == 1)
-        #expect(snapshot.daily.first?.coverageCounts.estimated == 0)
+        #expect(snapshot.daily.first?.estimatedRequestCount == 1)
+        #expect(snapshot.daily.first?.coverageCounts.priced == 0)
+        #expect(snapshot.daily.first?.coverageCounts.estimated == 1)
     }
 
     @Test

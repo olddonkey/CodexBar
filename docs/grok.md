@@ -132,7 +132,11 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl` over the requested
      history window (up to 365 days).
    - Aggregates the recorded per-turn token usage, model breakdown, request count,
-     and timestamps. Public xAI list prices provide a non-billed cost estimate.
+     and timestamps. Cost comes from the `costUsdTicks` the CLI recorded for each turn
+     (ticks / 1e10 = USD), which already carries the price tier and any promotional
+     rate. Entries that record no ticks fall back to public xAI list prices and are
+     counted as estimated, so a window reports whether it was recorded, estimated, or
+     a mix of both. Neither figure is a Grok bill.
    - Reads only a bounded tail of each growing JSONL file, caps individual records
      and retained parsed turns, bounds session-tree discovery, and reports history as incomplete if a bound is hit.
    - Uses `signals.json` only as a metadata fallback for sessions with no completed
@@ -274,7 +278,8 @@ when no completed turns are available and is also limited to 1 MiB.
 Those local daily token buckets also feed the shared Usage & Spend catalog so an
 enabled Grok subscription is counted instead of omitted. SuperGrok/X Premium+
 credits remain a quota window on the usage bar; they are never converted into
-dollars. Public xAI list-price dollars are shown only as a non-billed estimate.
+dollars. Dollar figures come from the spend the CLI recorded, or from public xAI list
+prices where it recorded none; neither is a bill.
 Local session scans run on the dedicated background usage-scan queue; menu cards
 and spend views reuse the already-published snapshot instead of walking the session
 directory whenever they render.

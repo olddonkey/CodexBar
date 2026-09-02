@@ -300,6 +300,10 @@ struct GrokCostUsagePricingTests: GrokLocalSessionScannerTestSupport {
         #expect(maximum.last30DaysTokens == 150)
         #expect(maximum.last30DaysCostUSD == 1.5)
         #expect(maximum.daily.map(\.date) == [olderDay, recentDay])
+        // A window that kept a priced row keeps its disclosure; one that kept none claims nothing rather
+        // than inheriting the snapshot's.
+        #expect(narrowed.costProvenance == full.costProvenance)
+        #expect(full.narrowed(toHistoryDays: 1, calendar: calendar).costProvenance == .unknown)
 
         let store = UsageStore(
             fetcher: UsageFetcher(environment: [:]),

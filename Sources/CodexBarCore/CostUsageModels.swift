@@ -197,7 +197,10 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
             calendar: calendar,
             historyCoverageIsEstablished: self.historyCoverageIsEstablished,
             meteredCostUSD: days == self.historyDays ? self.meteredCostUSD : nil,
-            costProvenance: self.costProvenance,
+            costProvenance: Self.narrowedProvenance(
+                snapshot: self.costProvenance,
+                entries: entries,
+                includesMetered: days == self.historyDays && self.meteredCostUSD != nil),
             credentialScopeFingerprint: self.credentialScopeFingerprint,
             historyLabel: self.historyLabel,
             projects: self.projects,
@@ -235,13 +238,31 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
             historyCoverageIsEstablished: self.historyCoverageIsEstablished,
             historyLabel: self.historyLabel,
             meteredCostUSD: derived.meteredCostUSD,
-            costProvenance: self.costProvenance,
+            costProvenance: Self.narrowedProvenance(
+                snapshot: self.costProvenance,
+                entries: entries,
+                includesMetered: derived.meteredCostUSD != nil),
             credentialScopeFingerprint: self.credentialScopeFingerprint,
             daily: entries,
             projects: self.projects,
             sessions: self.sessions,
             hourly: self.hourly,
             updatedAt: self.updatedAt)
+    }
+
+    /// A narrowed window can exclude every priced row it inherited its disclosure from, so the derived
+    /// snapshot must describe the rows it kept. This is the same narrowing the window summary applies; it
+    /// deliberately does not re-derive which *kind* of cost the surviving rows carry, because per-row
+    /// coverage counts mean different things to different providers.
+    private static func narrowedProvenance(
+        snapshot: CostProvenance,
+        entries: [CostUsageDailyReport.Entry],
+        includesMetered: Bool) -> CostProvenance
+    {
+        CostProvenance.forWindow(
+            snapshot: snapshot,
+            hasWindowCosts: entries.contains { $0.costUSD != nil },
+            includesMetered: includesMetered)
     }
 
     public func summary(forLastDays requestedDays: Int, calendar: Calendar = .current) -> CostUsageWindowSummary {

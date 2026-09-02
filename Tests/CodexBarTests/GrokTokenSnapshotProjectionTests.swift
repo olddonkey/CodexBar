@@ -122,30 +122,111 @@ struct GrokTokenSnapshotProjectionTests: GrokLocalSessionScannerTestSupport {
             environmentBase: environment)
     }
 
+    /// The projection recomputes tokens and requests from the days it keeps, so the cost has to follow. A
+    /// 30-day view rendering the 365-day dollar total beside a 30-day token count is the visible symptom.
+    @Test
+    func `grok projection recomputes window cost from the days it keeps`() throws {
+        let calendar = Calendar.current
+        let now = Date(timeIntervalSince1970: 1_787_079_600)
+        let recent = try #require(calendar.date(byAdding: .day, value: -2, to: now))
+        let older = try #require(calendar.date(byAdding: .day, value: -120, to: now))
+        let published = Self.snapshot(
+            daily: [
+                Self.entry(date: Self.dayKey(older, calendar: calendar), tokens: 900, costUSD: 9),
+                Self.entry(date: Self.dayKey(recent, calendar: calendar), tokens: 100, costUSD: 1),
+            ],
+            updatedAt: now,
+            historyDays: 365,
+            costProvenance: .vendorMetered)
+        let store = Self.makeStore(environment: [:])
+
+        let narrowed = try #require(store.grokLocalTokenSnapshot(
+            from: UsageSnapshot(primary: nil, secondary: nil, costUsage: published, updatedAt: now),
+            historyDays: 30))
+
+        #expect(published.last30DaysCostUSD == 10)
+        #expect(narrowed.last30DaysTokens == 100)
+        #expect(narrowed.last30DaysCostUSD == 1)
+    }
+
+    /// A narrowed window can drop every row of one kind, and its disclosure has to follow the rows it kept.
+    @Test
+    func `grok projection derives window provenance from the days it keeps`() throws {
+        let calendar = Calendar.current
+        let now = Date(timeIntervalSince1970: 1_787_079_600)
+        let recent = try #require(calendar.date(byAdding: .day, value: -2, to: now))
+        let older = try #require(calendar.date(byAdding: .day, value: -120, to: now))
+        let store = Self.makeStore(environment: [:])
+
+        let recordedRecently = Self.snapshot(
+            daily: [
+                Self.entry(
+                    date: Self.dayKey(older, calendar: calendar),
+                    tokens: 900,
+                    costUSD: 9,
+                    estimatedRequestCount: 1),
+                Self.entry(date: Self.dayKey(recent, calendar: calendar), tokens: 100, costUSD: 1),
+            ],
+            updatedAt: now,
+            historyDays: 365,
+            costProvenance: .mixed)
+        let narrowedToRecorded = try #require(store.grokLocalTokenSnapshot(
+            from: UsageSnapshot(primary: nil, secondary: nil, costUsage: recordedRecently, updatedAt: now),
+            historyDays: 30))
+        #expect(narrowedToRecorded.costProvenance == .vendorMetered)
+
+        let estimatedRecently = Self.snapshot(
+            daily: [
+                Self.entry(date: Self.dayKey(older, calendar: calendar), tokens: 900, costUSD: 9),
+                Self.entry(
+                    date: Self.dayKey(recent, calendar: calendar),
+                    tokens: 100,
+                    costUSD: 1,
+                    estimatedRequestCount: 1),
+            ],
+            updatedAt: now,
+            historyDays: 365,
+            costProvenance: .mixed)
+        let narrowedToEstimated = try #require(store.grokLocalTokenSnapshot(
+            from: UsageSnapshot(primary: nil, secondary: nil, costUsage: estimatedRecently, updatedAt: now),
+            historyDays: 30))
+        #expect(narrowedToEstimated.costProvenance == .listPriceEstimate)
+    }
+
     private static func snapshot(
         daily: [CostUsageDailyReport.Entry],
-        updatedAt: Date) -> CostUsageTokenSnapshot
+        updatedAt: Date,
+        historyDays: Int = 30,
+        costProvenance: CostProvenance = .unknown) -> CostUsageTokenSnapshot
     {
-        CostUsageTokenSnapshot(
+        let costs = daily.compactMap(\.costUSD)
+        return CostUsageTokenSnapshot(
             sessionTokens: daily.last?.totalTokens,
             sessionCostUSD: nil,
             last30DaysTokens: daily.compactMap(\.totalTokens).reduce(0, +),
-            last30DaysCostUSD: nil,
-            historyDays: 30,
+            last30DaysCostUSD: costs.isEmpty ? nil : costs.reduce(0, +),
+            historyDays: historyDays,
+            costProvenance: costProvenance,
             daily: daily,
             updatedAt: updatedAt)
     }
 
-    private static func entry(date: String, tokens: Int) -> CostUsageDailyReport.Entry {
+    private static func entry(
+        date: String,
+        tokens: Int,
+        costUSD: Double? = nil,
+        estimatedRequestCount: Int? = nil) -> CostUsageDailyReport.Entry
+    {
         CostUsageDailyReport.Entry(
             date: date,
             inputTokens: nil,
             outputTokens: nil,
             totalTokens: tokens,
             requestCount: 1,
-            costUSD: nil,
+            costUSD: costUSD,
             modelsUsed: ["grok-4.6"],
-            modelBreakdowns: nil)
+            modelBreakdowns: nil,
+            estimatedRequestCount: estimatedRequestCount)
     }
 
     private static func dayKey(_ date: Date, calendar: Calendar) -> String {

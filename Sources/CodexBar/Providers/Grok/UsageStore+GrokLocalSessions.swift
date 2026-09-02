@@ -21,20 +21,23 @@ extension UsageStore {
         guard !daily.isEmpty else { return nil }
         let tokens = daily.compactMap(\.totalTokens)
         let requests = daily.compactMap(\.requestCount)
+        // Tokens and requests are recomputed from the retained days, so the cost has to be too. Copying the
+        // published total would render the full 365-day amount beside a 30-day token count.
+        let costs = daily.compactMap(\.costUSD)
 
         return CostUsageTokenSnapshot(
             sessionTokens: published.sessionTokens,
             sessionCostUSD: published.sessionCostUSD,
             sessionRequests: published.sessionRequests,
             last30DaysTokens: tokens.isEmpty ? nil : tokens.reduce(0, +),
-            last30DaysCostUSD: published.last30DaysCostUSD,
+            last30DaysCostUSD: costs.isEmpty ? nil : costs.reduce(0, +),
             last30DaysRequests: requests.isEmpty ? nil : requests.reduce(0, +),
             currencyCode: published.currencyCode,
             historyDays: days,
             historyCoverageIsEstablished: published.historyCoverageIsEstablished && published.historyDays >= days,
             historyLabel: published.historyLabel,
             meteredCostUSD: published.meteredCostUSD,
-            costProvenance: published.costProvenance,
+            costProvenance: Self.grokWindowProvenance(published: published.costProvenance, daily: daily),
             credentialScopeFingerprint: published.credentialScopeFingerprint,
             daily: daily,
             projects: published.projects,
@@ -48,6 +51,26 @@ extension UsageStore {
             env: self.environmentBase,
             lookbackDays: historyDays)
         return summary.toCostUsageTokenSnapshot(historyDays: historyDays)
+    }
+
+    /// The disclosure has to describe the days this window kept. Grok's scanner counts a CLI-recorded turn
+    /// as priced and a public-card fallback as estimated, so the retained rows say which sources survived;
+    /// a window that kept no priced rows claims nothing.
+    private static func grokWindowProvenance(
+        published: CostProvenance,
+        daily: [CostUsageDailyReport.Entry]) -> CostProvenance
+    {
+        var counts = CostUsageCoverageCounts()
+        for entry in daily {
+            counts.merge(entry.coverageCounts)
+        }
+        guard daily.contains(where: { $0.costUSD != nil }) else { return .unknown }
+        switch (counts.priced > 0, counts.estimated > 0) {
+        case (true, true): return .mixed
+        case (true, false): return .vendorMetered
+        case (false, true): return .listPriceEstimate
+        case (false, false): return published
+        }
     }
 
     private static func grokLocalDayKey(for date: Date, calendar: Calendar) -> String? {

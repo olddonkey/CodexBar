@@ -2487,7 +2487,15 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared construct dispatches a provider-owned capability at the generic integration boundary."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/SpendDashboardModel.swift",
-            line: 1099,
+            line: 499,
+            anchor: "let provenance = if summary.input.provider == .grok {",
+            expectedProviderIDs: ["grok"],
+            expectedReferenceCount: 1,
+            expectedReferenceFingerprint: ["grok@0"],
+            reason: "Grok owns how retained row coverage distinguishes recorded spend from list-price estimates."),
+        AllowedProviderConstruct(
+            path: "Sources/CodexBar/SpendDashboardModel.swift",
+            line: 1107,
             anchor: "guard provider == .mistral || provider == .openrouter || provider == .xai else { return displayCalendar }",
             expectedProviderIDs: ["mistral", "openrouter", "xai"],
             expectedReferenceCount: 3,

@@ -123,6 +123,26 @@ public struct GrokLocalSessionSummary: Sendable {
             daily: entries,
             updatedAt: self.scannedAt)
     }
+
+    /// Grok counts recorded turns as priced and public-card fallbacks as estimated. Only a mixed
+    /// snapshot needs these counts to decide which sources survived a window or selected-day filter.
+    public static func costProvenance(
+        for daily: [CostUsageDailyReport.Entry],
+        fallback: CostProvenance) -> CostProvenance
+    {
+        guard daily.contains(where: { $0.costUSD != nil }) else { return .unknown }
+        guard fallback == .mixed else { return fallback }
+        var counts = CostUsageCoverageCounts()
+        for entry in daily {
+            counts.merge(entry.coverageCounts)
+        }
+        switch (counts.priced > 0, counts.estimated > 0) {
+        case (true, true): return .mixed
+        case (true, false): return .vendorMetered
+        case (false, true): return .listPriceEstimate
+        case (false, false): return fallback
+        }
+    }
 }
 
 struct GrokLocalSessionParseCacheMetrics: Sendable, Equatable {

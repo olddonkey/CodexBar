@@ -42,6 +42,19 @@ struct GrokWindowProvenanceProofTests: GrokLocalSessionScannerTestSupport {
         #expect(abs((selected.last30DaysCostUSD ?? 0) - expectedCost) < 1e-12)
         #expect(selected.costProvenance == expectedSource)
         try Self.verifySurfaces(selected, days: 30)
+        // The dashboard retains the full scan and applies its own range/day selection after capture.
+        // Exercise that path too, rather than giving it an already narrowed snapshot.
+        for (days, selectedDay) in [(30, Date?.none), (365, Optional(recent))] {
+            let dashboard = SpendDashboardModel.build(
+                inputs: [.init(provider: .grok, displayName: "Grok", snapshot: published)],
+                requestedDays: days,
+                now: now,
+                selectedDay: selectedDay)
+            let group = try #require(dashboard.groups.first)
+            #expect(group.provenance == expectedSource)
+            print("fixture_dashboard_filter=\(selectedDay == nil ? "30-day-window" : "selected-day")")
+            print("fixture_dashboard_source=\(group.provenance.rawValue)")
+        }
         print("fixture_full_source=\(published.costProvenance.rawValue)")
         print("fixture_window_days=\(selected.historyDays)")
         print("fixture_window_tokens=\(selected.last30DaysTokens ?? 0)")

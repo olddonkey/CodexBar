@@ -37,7 +37,7 @@ extension UsageStore {
             historyCoverageIsEstablished: published.historyCoverageIsEstablished && published.historyDays >= days,
             historyLabel: published.historyLabel,
             meteredCostUSD: published.meteredCostUSD,
-            costProvenance: Self.grokWindowProvenance(published: published.costProvenance, daily: daily),
+            costProvenance: GrokLocalSessionSummary.costProvenance(for: daily, fallback: published.costProvenance),
             credentialScopeFingerprint: published.credentialScopeFingerprint,
             daily: daily,
             projects: published.projects,
@@ -71,33 +71,15 @@ extension UsageStore {
             historyCoverageIsEstablished: narrowed.historyCoverageIsEstablished,
             historyLabel: narrowed.historyLabel,
             meteredCostUSD: narrowed.meteredCostUSD,
-            costProvenance: Self.grokWindowProvenance(published: published.costProvenance, daily: narrowed.daily),
+            costProvenance: GrokLocalSessionSummary.costProvenance(
+                for: narrowed.daily,
+                fallback: published.costProvenance),
             credentialScopeFingerprint: narrowed.credentialScopeFingerprint,
             daily: narrowed.daily,
             projects: narrowed.projects,
             sessions: narrowed.sessions,
             hourly: narrowed.hourly,
             updatedAt: narrowed.updatedAt)
-    }
-
-    /// The disclosure has to describe the days this window kept. Grok's scanner counts a CLI-recorded turn
-    /// as priced and a public-card fallback as estimated, so the retained rows say which sources survived;
-    /// a window that kept no priced rows claims nothing.
-    private static func grokWindowProvenance(
-        published: CostProvenance,
-        daily: [CostUsageDailyReport.Entry]) -> CostProvenance
-    {
-        var counts = CostUsageCoverageCounts()
-        for entry in daily {
-            counts.merge(entry.coverageCounts)
-        }
-        guard daily.contains(where: { $0.costUSD != nil }) else { return .unknown }
-        switch (counts.priced > 0, counts.estimated > 0) {
-        case (true, true): return .mixed
-        case (true, false): return .vendorMetered
-        case (false, true): return .listPriceEstimate
-        case (false, false): return published
-        }
     }
 
     private static func grokLocalDayKey(for date: Date, calendar: Calendar) -> String? {

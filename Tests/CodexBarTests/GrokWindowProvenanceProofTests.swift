@@ -12,12 +12,17 @@ struct GrokWindowProvenanceProofTests: GrokLocalSessionScannerTestSupport {
         let now = Date()
         let recent = try #require(Calendar.current.date(byAdding: .day, value: -2, to: now))
         let older = try #require(Calendar.current.date(byAdding: .day, value: -120, to: now))
+        let recordedUsage = self.usage(
+            input: 1000,
+            output: 0,
+            modelCalls: 1,
+            costUsdTicks: 10_000_000_000,
+            modelUsage: ["grok-4.6-build": self.modelUsage(input: 1000, output: 0, modelCalls: 1)])
+        let estimatedUsage = self.singleModelUsage(input: 1000, output: 0)
         try self.writeUpdates(
             [
-                self.turn(timestamp: older, usage: self.singleModelUsage(
-                    input: 1000, output: 0, costUsdTicks: estimatedRecently ? 10_000_000_000 : nil)),
-                self.turn(timestamp: recent, usage: self.singleModelUsage(
-                    input: 1000, output: 0, costUsdTicks: estimatedRecently ? nil : 10_000_000_000)),
+                self.turn(timestamp: older, usage: estimatedRecently ? recordedUsage : estimatedUsage),
+                self.turn(timestamp: recent, usage: estimatedRecently ? estimatedUsage : recordedUsage),
             ],
             to: fixture.session.appendingPathComponent("updates.jsonl"),
             modificationDate: now)

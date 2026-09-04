@@ -395,6 +395,7 @@ public enum GrokLocalSessionScanner {
         var requestCount = 0
         var costUSD = 0.0
         var hasPricedCost = false
+        var hasUnattributedCost = false
     }
 
     private struct MutableDailyBucket {
@@ -968,7 +969,11 @@ public enum GrokLocalSessionScanner {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
+}
 
+// MARK: - Daily aggregation and pricing
+
+extension GrokLocalSessionScanner {
     private static func aggregate(
         turn: GrokParsedTurn,
         sessionPath: String,
@@ -986,16 +991,18 @@ public enum GrokLocalSessionScanner {
         bucket.totalTokens += turn.usage.totalTokens
         bucket.sessionIDs.insert(sessionPath)
 
+        // The outer tick is the authoritative turn total, including when model usage is populated.
+        let recordedTurnCost = turn.usage.costUsdTicks.map { Double($0) / Self.costUsdTicksPerUSD }
+        let modelCostsMatchTurn = self.recordedModelCostsMatchTurn(turn)
+        if let recordedTurnCost {
+            bucket.costUSD += recordedTurnCost
+            bucket.hasPricedCost = true
+            aggregation.sawRecordedCost = true
+        }
         if turn.modelUsage.isEmpty {
             let requests = self.requestCount(for: turn.usage)
             bucket.requestCount += requests
-            // A turn with no per-model attribution still carries its own recorded spend; only the
-            // list-price path needs a SKU, so an unattributed turn is unpriced without recorded ticks.
-            if let recorded = turn.usage.costUsdTicks {
-                bucket.costUSD += Double(recorded) / Self.costUsdTicksPerUSD
-                bucket.hasPricedCost = true
-                aggregation.sawRecordedCost = true
-            } else {
+            if recordedTurnCost == nil {
                 bucket.unpricedRequestCount += requests
             }
         }
@@ -1013,9 +1020,16 @@ public enum GrokLocalSessionScanner {
             breakdown.totalTokens += usage.totalTokens
             breakdown.requestCount += requests
 
-            // The CLI's recorded spend already carries the price tier and any promotional rate, so it wins
-            // over a reconstruction whenever the record has it. The public card stays the fallback.
-            if let recorded = usage.costUsdTicks {
+            if recordedTurnCost != nil {
+                // Keep model dollars only when the complete breakdown agrees with the paid turn total.
+                // The outer total was already counted, so nested ticks never add to it again.
+                if modelCostsMatchTurn, let recorded = usage.costUsdTicks {
+                    breakdown.costUSD += Double(recorded) / Self.costUsdTicksPerUSD
+                    breakdown.hasPricedCost = true
+                } else {
+                    breakdown.hasUnattributedCost = true
+                }
+            } else if let recorded = usage.costUsdTicks {
                 let cost = Double(recorded) / Self.costUsdTicksPerUSD
                 breakdown.costUSD += cost
                 breakdown.hasPricedCost = true
@@ -1040,6 +1054,18 @@ public enum GrokLocalSessionScanner {
             bucket.modelBreakdowns[sku] = breakdown
         }
         aggregation.daily[day] = bucket
+    }
+
+    private static func recordedModelCostsMatchTurn(_ turn: GrokParsedTurn) -> Bool {
+        guard let total = turn.usage.costUsdTicks, !turn.modelUsage.isEmpty else { return false }
+        var modelTotal = 0
+        for usage in turn.modelUsage.values {
+            guard let recorded = usage.costUsdTicks else { return false }
+            let (sum, overflow) = modelTotal.addingReportingOverflow(recorded)
+            guard !overflow else { return false }
+            modelTotal = sum
+        }
+        return modelTotal == total
     }
 
     private static func costUSD(
@@ -1070,10 +1096,8 @@ public enum GrokLocalSessionScanner {
                 outputTokens: usage.outputTokens)
         }
 
-        // Even splitting is intentionally an approximation: context normally grows within a turn,
-        // so mean per-call inputs under-tier later calls. In a measured 27-turn sample this was about
-        // 4% below the vendor tick proxy overall and 26% low on one 28-call turn. Vendor ticks still
-        // do not drive displayed cost; the split is retained because aggregate tiering overstates it.
+        // Without recorded turn or model spend, even splitting approximates public list prices.
+        // Context can grow within a turn, so mean per-call inputs can under-tier later calls.
         return self.syntheticCallGroups(
             usage: usage,
             callCount: callCount,
@@ -1224,7 +1248,7 @@ public enum GrokLocalSessionScanner {
             guard let value = bucket.modelBreakdowns[model] else { return nil }
             return CostUsageDailyReport.ModelBreakdown(
                 modelName: model,
-                costUSD: value.hasPricedCost ? value.costUSD : nil,
+                costUSD: value.hasPricedCost && !value.hasUnattributedCost ? value.costUSD : nil,
                 totalTokens: value.totalTokens,
                 requestCount: value.requestCount,
                 inputTokens: value.inputTokens,

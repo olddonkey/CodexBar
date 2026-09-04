@@ -137,6 +137,11 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      rate. Entries that record no ticks fall back to public xAI list prices and are
      counted as estimated, so a window reports whether it was recorded, estimated, or
      a mix of both. Neither figure is a Grok bill.
+   - A positive outer `usage.costUsdTicks` is the authoritative turn total and is
+     counted once, even when `modelUsage` is populated. Nested recorded costs are used
+     for model dollars only when every model has ticks and their sum matches that total;
+     otherwise model tokens remain available while model dollars stay unknown. Without
+     a positive outer total, each model uses its recorded ticks or the list-price fallback.
    - Live menu and dashboard publications, including reused in-flight scan results,
      derive the cost source from the days retained in the requested window. A shorter
      window containing only CLI-recorded turns stays recorded even when older history

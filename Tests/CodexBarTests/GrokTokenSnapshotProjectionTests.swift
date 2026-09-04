@@ -193,6 +193,78 @@ struct GrokTokenSnapshotProjectionTests: GrokLocalSessionScannerTestSupport {
         #expect(narrowedToEstimated.costProvenance == .listPriceEstimate)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func `live Grok consumers retain the source of a narrowed mixed publication`(
+        estimatedRecently: Bool,
+        hasRemoteSnapshot: Bool) throws
+    {
+        let published = try Self.mixedSnapshot(estimatedRecently: estimatedRecently)
+        let store = Self.makeStore(environment: [:])
+        store.publishTokenSnapshot(published, for: .grok)
+        let remote = hasRemoteSnapshot ? UsageSnapshot(
+            primary: nil,
+            secondary: nil,
+            costUsage: Self.snapshot(daily: published.daily, updatedAt: published.updatedAt.addingTimeInterval(-60)),
+            updatedAt: published.updatedAt.addingTimeInterval(-60)) : nil
+
+        let selected = try #require(store.tokenSnapshotForLiveProviderConsumer(
+            fromProviderSnapshot: remote,
+            provider: .grok,
+            historyDays: 30))
+
+        #expect(selected.last30DaysTokens == 100)
+        #expect(selected.last30DaysCostUSD == 1)
+        #expect(selected.updatedAt == published.updatedAt)
+        #expect(selected.costProvenance == (estimatedRecently ? .listPriceEstimate : .vendorMetered))
+        let dashboard = SpendDashboardModel.build(
+            inputs: [.init(provider: .grok, displayName: "Grok", snapshot: selected)],
+            requestedDays: 30,
+            now: selected.updatedAt)
+        #expect(dashboard.groups.first?.provenance == selected.costProvenance)
+    }
+
+    @Test(arguments: [false, true])
+    func `new and shared Grok scans retain the source of the requested window`(estimatedRecently: Bool) async throws {
+        let published = try Self.mixedSnapshot(estimatedRecently: estimatedRecently)
+        let store = Self.makeStore(environment: [:])
+        let metadata = try #require(ProviderRegistry.shared.metadata[.grok])
+        store.settings.setProviderEnabled(provider: .grok, metadata: metadata, enabled: true)
+        store._test_grokLocalTokenScannerOverride = { _ in published }
+
+        let first = try #require(await store.scanAndPublishGrokLocalTokenSnapshot(historyDays: 30))
+        #expect(first.costProvenance == (estimatedRecently ? .listPriceEstimate : .vendorMetered))
+        #expect(first.last30DaysCostUSD == 1)
+
+        store.grokLocalTokenScanTask = Task { published }
+        defer { store.grokLocalTokenScanTask = nil }
+        let shared = try #require(await store.scanAndPublishGrokLocalTokenSnapshot(historyDays: 30))
+        #expect(shared.costProvenance == (estimatedRecently ? .listPriceEstimate : .vendorMetered))
+        #expect(shared == first)
+    }
+
+    private static func mixedSnapshot(estimatedRecently: Bool) throws -> CostUsageTokenSnapshot {
+        let calendar = Calendar.current
+        let now = Date(timeIntervalSince1970: 1_787_079_600)
+        let recent = try #require(calendar.date(byAdding: .day, value: -2, to: now))
+        let older = try #require(calendar.date(byAdding: .day, value: -120, to: now))
+        return Self.snapshot(
+            daily: [
+                Self.entry(
+                    date: Self.dayKey(older, calendar: calendar),
+                    tokens: 900,
+                    costUSD: 9,
+                    estimatedRequestCount: estimatedRecently ? nil : 1),
+                Self.entry(
+                    date: Self.dayKey(recent, calendar: calendar),
+                    tokens: 100,
+                    costUSD: 1,
+                    estimatedRequestCount: estimatedRecently ? 1 : nil),
+            ],
+            updatedAt: now,
+            historyDays: 365,
+            costProvenance: .mixed)
+    }
+
     private static func snapshot(
         daily: [CostUsageDailyReport.Entry],
         updatedAt: Date,

@@ -531,9 +531,7 @@ extension UsageStore {
         let provider = UsageProvider.grok
         let requestedHistoryDays = min(max(1, historyDays), GrokLocalSessionScanner.maximumLookbackDays)
         if let task = self.grokLocalTokenScanTask {
-            return await task.value?.narrowed(
-                toHistoryDays: requestedHistoryDays,
-                calendar: self.settings.costUsageBucketCalendar)
+            return await task.value.map { self.narrowedGrokTokenSnapshot($0, historyDays: requestedHistoryDays) }
         }
 
         let environment = self.environmentBase
@@ -578,9 +576,7 @@ extension UsageStore {
             self.grokLocalTokenScanTask = nil
             self.grokLocalTokenScanToken = nil
         }
-        return snapshot?.narrowed(
-            toHistoryDays: requestedHistoryDays,
-            calendar: self.settings.costUsageBucketCalendar)
+        return snapshot.map { self.narrowedGrokTokenSnapshot($0, historyDays: requestedHistoryDays) }
     }
 
     nonisolated static func tokenCostRequiresProviderSnapshot(_ provider: UsageProvider) -> Bool {
@@ -651,9 +647,7 @@ extension UsageStore {
               let published = self.tokenSnapshotPublicationForCurrentProviderConfig(for: provider)?.snapshot
         else { return projected }
         let windowDays = historyDays ?? self.settings.costUsageHistoryDays
-        let narrowedPublished = published.narrowed(
-            toHistoryDays: windowDays,
-            calendar: self.settings.costUsageBucketCalendar)
+        let narrowedPublished = self.narrowedGrokTokenSnapshot(published, historyDays: windowDays)
         guard let projected else { return narrowedPublished }
         return narrowedPublished.updatedAt > projected.updatedAt ? narrowedPublished : projected
     }

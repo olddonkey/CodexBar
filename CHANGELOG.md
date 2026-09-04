@@ -12,6 +12,9 @@
 - Menu bar: show an exhausted supported quota in automatic switcher progress instead of healthy weekly capacity, while preserving normal weekly progress and provider-specific quota pools (partial fix for #3349). Thanks @rwese!
 - Menu bar: reuse cached template images for single-line text-only custom layouts, preserving native highlighting, display scaling, spacing, and vertical adjustments; colored emoji, rich, stale, and high-contrast content retain their existing rendering (#3110). Thanks @thatlev!
 
+### Usage & Spend
+- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and price it from the spend the CLI recorded, falling back to clearly labeled public xAI list prices where it recorded none; OpenCodex xAI history remains token-only without request-time credential provenance (#3135, #3345). Thanks @olddonkey and @initH271!
+
 ## 0.56.5 — 2026-09-04
 
 ### Highlights
@@ -114,9 +117,6 @@
 - Clarify the Codex cost-history refresh floor and explain that Manual stops recurring refreshes, not startup or pending catch-up scans.
 - Distinguish OpenCode-backed Codex OAuth quota from unsupported OpenCode session cost imports, preserving provider and account boundaries (investigated alongside #3273). Thanks @pedrommone!
 - Document existing z.ai credit quotas and explain how to configure independent provider widgets.
-
-### Usage & Spend
-- Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and price it from the spend the CLI recorded, falling back to clearly labeled public xAI list prices where it recorded none; OpenCodex xAI history remains token-only without request-time credential provenance (#3135, #3345). Thanks @olddonkey and @initH271!
 
 ## 0.56.0 — 2026-08-28
 

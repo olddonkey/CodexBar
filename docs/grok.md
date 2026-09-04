@@ -137,6 +137,10 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      rate. Entries that record no ticks fall back to public xAI list prices and are
      counted as estimated, so a window reports whether it was recorded, estimated, or
      a mix of both. Neither figure is a Grok bill.
+   - Live menu and dashboard publications, including reused in-flight scan results,
+     derive the cost source from the days retained in the requested window. A shorter
+     window containing only CLI-recorded turns stays recorded even when older history
+     includes list-price estimates; an estimate-only window stays estimated.
    - Reads only a bounded tail of each growing JSONL file, caps individual records
      and retained parsed turns, bounds session-tree discovery, and reports history as incomplete if a bound is hit.
    - Uses `signals.json` only as a metadata fallback for sessions with no completed

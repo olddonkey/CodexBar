@@ -3287,7 +3287,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact app-runtime bridge coordinates provider-owned state through the shared controller."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/UsageStore+TokenCost.swift",
-            line: 632,
+            line: 628,
             anchor: "self.tokenFailureGates[.codex]?.reset()",
             expectedProviderIDs: ["claude", "codex"],
             expectedReferenceCount: 2,

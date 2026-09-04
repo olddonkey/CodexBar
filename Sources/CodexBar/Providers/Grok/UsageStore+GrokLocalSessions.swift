@@ -53,6 +53,33 @@ extension UsageStore {
         return summary.toCostUsageTokenSnapshot(historyDays: historyDays)
     }
 
+    /// Generic window math does not know that Grok's priced rows are CLI-recorded spend. Apply the same
+    /// source-aware disclosure to live publications and scan results as to the remote-backed projection.
+    func narrowedGrokTokenSnapshot(_ published: CostUsageTokenSnapshot, historyDays: Int) -> CostUsageTokenSnapshot {
+        let narrowed = published.narrowed(
+            toHistoryDays: historyDays,
+            calendar: self.settings.costUsageBucketCalendar)
+        return CostUsageTokenSnapshot(
+            sessionTokens: narrowed.sessionTokens,
+            sessionCostUSD: narrowed.sessionCostUSD,
+            sessionRequests: narrowed.sessionRequests,
+            last30DaysTokens: narrowed.last30DaysTokens,
+            last30DaysCostUSD: narrowed.last30DaysCostUSD,
+            last30DaysRequests: narrowed.last30DaysRequests,
+            currencyCode: narrowed.currencyCode,
+            historyDays: narrowed.historyDays,
+            historyCoverageIsEstablished: narrowed.historyCoverageIsEstablished,
+            historyLabel: narrowed.historyLabel,
+            meteredCostUSD: narrowed.meteredCostUSD,
+            costProvenance: Self.grokWindowProvenance(published: published.costProvenance, daily: narrowed.daily),
+            credentialScopeFingerprint: narrowed.credentialScopeFingerprint,
+            daily: narrowed.daily,
+            projects: narrowed.projects,
+            sessions: narrowed.sessions,
+            hourly: narrowed.hourly,
+            updatedAt: narrowed.updatedAt)
+    }
+
     /// The disclosure has to describe the days this window kept. Grok's scanner counts a CLI-recorded turn
     /// as priced and a public-card fallback as estimated, so the retained rows say which sources survived;
     /// a window that kept no priced rows claims nothing.

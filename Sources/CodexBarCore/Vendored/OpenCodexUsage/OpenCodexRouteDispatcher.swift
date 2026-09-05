@@ -7,14 +7,6 @@ public enum OpenCodexRouteTarget: Equatable, Sendable {
 }
 
 public enum OpenCodexRouteDispatcher {
-    static func route(entry: OpenCodexUsageEntry) -> OpenCodexRouteTarget {
-        // Provider-specific by design: only derived, request-time OAuth attempts enter Grok's subscription.
-        if entry.provider == "xai", entry.credentialSource == .grokOAuth {
-            return .subscription(.grok)
-        }
-        return self.route(provider: entry.provider, modelName: entry.model)
-    }
-
     public static func route(provider: String) -> OpenCodexRouteTarget {
         // Provider-specific by design: OpenCodex provider prefixes map onto subscription rows or token-only spend.
         let providerID = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -22,8 +14,8 @@ public enum OpenCodexRouteDispatcher {
         case "openai":
             return .subscription(.codex)
         case "xai":
-            // Legacy rows and API-key traffic have no subscription attribution. Only the entry-aware
-            // overload accepts Grok OAuth provenance derived from a physical attempt.
+            // Legacy rows and API-key traffic have no subscription attribution. Only the
+            // per-attempt fan-out accepts explicit Grok OAuth provenance.
             return .tokenOnly
         case "opencode-go":
             return .subscription(.opencodego)

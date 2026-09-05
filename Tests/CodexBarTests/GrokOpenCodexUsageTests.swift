@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SQLite3
 import Testing
@@ -161,6 +162,104 @@ struct GrokOpenCodexUsageTests {
                 #expect(result.inputs.first?.snapshot.last30DaysTokens == 5)
             }
         }
+    }
+
+    @Test func `non Grok token only routes keep standalone zero and custom prices`() throws {
+        for provider in ["opencode", "opencode-free"] {
+            let entry = OpenCodexUsageEntry(
+                requestID: "standalone-\(provider)",
+                timestamp: Self.now,
+                provider: provider,
+                model: "deepseek-v4-flash-free",
+                usageStatus: .reported,
+                usage: OpenCodexTokenUsage(inputTokens: 3, outputTokens: 2, totalTokens: 5),
+                totalTokens: 5)
+            let freeCatalogJSON = """
+            {"opencode":{"id":"opencode","models":{"deepseek-v4-flash-free":{
+            "id":"deepseek-v4-flash-free","cost":{"input":0,"output":0}}}}}
+            """
+            let catalog = try JSONDecoder().decode(ModelsDevCatalog.self, from: Data(freeCatalogJSON.utf8))
+            let free = OpenCodexUsageAggregator.snapshot(
+                entries: [entry],
+                now: Self.now,
+                historyDays: 7,
+                calendar: Self.calendar,
+                modelsDevCatalog: catalog,
+                customPricingOverlay: .empty)
+            #expect(free.last30DaysCostUSD == 0)
+            for inputRate in [0.0, 2.0] {
+                let pricing = CostUsageCustomPricing(
+                    entries: ["\(provider)/deepseek-v4-flash-free": .init(input: inputRate, output: inputRate)],
+                    fingerprint: "standalone-\(inputRate)")
+                let snapshot = OpenCodexUsageAggregator.snapshot(
+                    entries: [entry],
+                    now: Self.now,
+                    historyDays: 7,
+                    calendar: Self.calendar,
+                    customPricing: pricing,
+                    modelsDevCatalog: ModelsDevCatalog(providers: [:]))
+                let cost = try #require(snapshot.last30DaysCostUSD)
+                #expect(abs(cost - inputRate * 5 / 1_000_000) < 0.000000000001)
+                #expect(Self.snapshots([entry]).isEmpty)
+            }
+        }
+    }
+
+    @Test func `captured producer ledger imports through the dashboard disk loader and cache`() throws {
+        let fixture = try #require(Bundle.module.url(
+            forResource: "usage", withExtension: "jsonl", subdirectory: "Fixtures/GrokOpenCodex"))
+        let captured = try Data(contentsOf: fixture)
+        let digest = SHA256.hash(data: captured).map { String(format: "%02x", $0) }.joined()
+        #expect(digest == "ef6d8758b40910f6e5993d5b5a105a2ad2834c6c1bd0565ab87b61cf091c4978")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let log = root.appendingPathComponent("usage.jsonl")
+        try captured.write(to: log)
+        let proofNow = Date(timeIntervalSince1970: 1_788_597_900)
+        let config = SpendDashboardConfiguration(
+            costUsageEnabled: true,
+            providerIDs: [UsageProvider.grok.rawValue],
+            codexAccountIdentities: [],
+            bucketTimeZoneIdentifier: "UTC",
+            openCodexUsageLogsEnabled: true)
+        let request = SpendDashboardLoadRequest(
+            configuration: config,
+            capturedInputs: [],
+            unavailableSourceIDs: [],
+            confirmedEmptySourceIDs: [],
+            codexRequests: [],
+            now: proofNow,
+            force: false)
+        let cache = root.appendingPathComponent("cache")
+        let imported = SpendDashboardSource.mergingOpenCodexInputsWithObservation(
+            [], request: request, environment: ["OPENCODEX_HOME": root.path], cacheRoot: cache)
+        let snapshot = try #require(imported.inputs.first?.snapshot)
+        #expect(imported.inputs.count == 1)
+        #expect(imported.inputs.first?.provider == .grok)
+        #expect(snapshot.last30DaysTokens == 5)
+        #expect(snapshot.daily.first?.inputTokens == 3)
+        #expect(snapshot.daily.first?.outputTokens == 2)
+        let dashboard = SpendDashboardModel.build(inputs: imported.inputs, requestedDays: 7, now: proofNow)
+        #expect(dashboard.groups.first?.providers.first?.totalTokens == 5)
+        let recorder = OpenCodexUsageParser.LogReadRecorder()
+        let reopened = OpenCodexUsageStore.withLogReadRecorderForTesting(recorder) {
+            SpendDashboardSource.mergingOpenCodexInputsWithObservation(
+                [], request: request, environment: ["OPENCODEX_HOME": root.path], cacheRoot: cache)
+        }
+        #expect(reopened.inputs.first?.snapshot.last30DaysTokens == 5)
+        #expect(recorder.snapshot().bytesRead == 0)
+        // Keep the exact producer-written API-key line, without fabricating a replacement record.
+        let text = try #require(String(data: captured, encoding: .utf8))
+        let keyLine = try #require(text.split(separator: "\n").first { $0.contains("\"xai-api-key\"") })
+        try Data((keyLine + "\n").utf8).write(to: log)
+        let keyOnly = SpendDashboardSource.mergingOpenCodexInputsWithObservation(
+            [], request: request, environment: ["OPENCODEX_HOME": root.path], cacheRoot: cache)
+        #expect(keyOnly.inputs.isEmpty)
+        print("producer_capture_sha256=\(digest)")
+        print("producer_log_rows=2 total_reported_tokens=10 grok_oauth_tokens=5")
+        print("producer_import_dashboard_tokens=5 cache_reopen_bytes=\(recorder.snapshot().bytesRead)")
+        print("producer_api_key_only_subscription_rows=\(keyOnly.inputs.count)")
     }
 
     private static func snapshots(_ entries: [OpenCodexUsageEntry]) -> [UsageProvider: CostUsageTokenSnapshot] {

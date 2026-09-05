@@ -490,7 +490,8 @@ public enum GrokLocalSessionScanner {
                     fileManager: .default,
                     lookbackDays: lookbackDays,
                     now: now,
-                    pricing: pricing)
+                    pricing: pricing,
+                    checkCancellation: checkCancellation)
                 try checkCancellation()
                 return summary
             }
@@ -535,7 +536,9 @@ public enum GrokLocalSessionScanner {
         modelsDevCatalog: ModelsDevCatalog,
         modelsDevCacheRoot: URL? = nil,
         customPricing: CostUsageCustomPricing? = .empty,
-        scanLimits: GrokLocalSessionScanLimits = .production) -> GrokLocalSessionSummary
+        scanLimits: GrokLocalSessionScanLimits = .production,
+        checkCancellation: @escaping @Sendable () throws -> Void = { try Task.checkCancellation() })
+        -> GrokLocalSessionSummary
     {
         self.summarize(
             env: env,
@@ -546,7 +549,8 @@ public enum GrokLocalSessionScanner {
                 modelsDevCatalog: modelsDevCatalog,
                 modelsDevCacheRoot: modelsDevCacheRoot,
                 customPricing: customPricing),
-            scanLimits: scanLimits)
+            scanLimits: scanLimits,
+            checkCancellation: checkCancellation)
     }
 
     static func summarize(
@@ -574,7 +578,9 @@ public enum GrokLocalSessionScanner {
         lookbackDays: Int,
         now: Date,
         pricing: PricingContext,
-        scanLimits: GrokLocalSessionScanLimits = .production) -> GrokLocalSessionSummary
+        scanLimits: GrokLocalSessionScanLimits = .production,
+        checkCancellation: @escaping @Sendable () throws -> Void = { try Task.checkCancellation() })
+        -> GrokLocalSessionSummary
     {
         let root = GrokCredentialsStore.grokHomeURL(env: env, fileManager: fileManager)
             .appendingPathComponent("sessions", isDirectory: true)
@@ -593,8 +599,8 @@ public enum GrokLocalSessionScanner {
             root: root,
             fileManager: fileManager,
             lookbackCutoff: lookbackCutoff,
-            maximumCount: scanLimits.maximumSessions,
-            maximumDiscoveryEntries: scanLimits.maximumDiscoveryEntries)
+            limits: scanLimits,
+            checkCancellation: checkCancellation)
         else {
             return self.emptySummary(now: now)
         }
@@ -607,7 +613,7 @@ public enum GrokLocalSessionScanner {
         var historyCoverageIsEstablished = sessionSelection.historyCoverageIsEstablished
 
         for sessionPath in sessionSelection.paths {
-            guard !Task.isCancelled else { return self.emptySummary(now: now) }
+            guard !self.cancellationRequested(checkCancellation) else { return self.emptySummary(now: now) }
             guard remainingTotalBytes > 0, remainingTotalTurns > 0 else {
                 historyCoverageIsEstablished = false
                 break
@@ -628,9 +634,13 @@ public enum GrokLocalSessionScanner {
                     mtimeIntervalSince1970: identity.modificationDate.timeIntervalSince1970,
                     limits: fileLimits)
                 {
-                    self.decodeTurns(at: updates, fileSize: identity.size, limits: fileLimits)
+                    self.decodeTurns(
+                        at: updates,
+                        fileSize: identity.size,
+                        limits: fileLimits,
+                        checkCancellation: checkCancellation)
                 }
-                guard !Task.isCancelled else { return self.emptySummary(now: now) }
+                guard !self.cancellationRequested(checkCancellation) else { return self.emptySummary(now: now) }
                 historyCoverageIsEstablished = historyCoverageIsEstablished
                     && parsed.historyCoverageIsEstablished
                 updatesYieldedCompletedTurns = !parsed.turns.isEmpty
@@ -643,7 +653,7 @@ public enum GrokLocalSessionScanner {
                 if !currentTurns.isEmpty {
                     sessionCount += 1
                     for turn in currentTurns {
-                        guard !Task.isCancelled else { return self.emptySummary(now: now) }
+                        guard !self.cancellationRequested(checkCancellation) else { return self.emptySummary(now: now) }
                         if turn.timestamp > (lastSessionAt ?? Date.distantPast) {
                             lastSessionAt = turn.timestamp
                         }
@@ -714,7 +724,13 @@ public enum GrokLocalSessionScanner {
     {
         try await CostUsageScanExecutor.run { checkCancellation in
             try checkCancellation()
-            let summary = Self.summarize(env: env, lookbackDays: lookbackDays, now: now)
+            let summary = Self.summarize(
+                env: env,
+                fileManager: .default,
+                lookbackDays: lookbackDays,
+                now: now,
+                pricing: PricingContext(modelsDevCatalog: nil, modelsDevCacheRoot: nil, customPricing: .empty),
+                checkCancellation: checkCancellation)
             try checkCancellation()
             return summary
         }
@@ -740,6 +756,15 @@ public enum GrokLocalSessionScanner {
         self.parseCache.cachedTurnCount()
     }
 
+    private static func cancellationRequested(_ checkCancellation: () throws -> Void) -> Bool {
+        do {
+            try checkCancellation()
+            return false
+        } catch {
+            return true
+        }
+    }
+
     private static func emptySummary(now: Date) -> GrokLocalSessionSummary {
         GrokLocalSessionSummary(
             sessionCount: 0,
@@ -763,8 +788,8 @@ public enum GrokLocalSessionScanner {
         root: URL,
         fileManager: FileManager,
         lookbackCutoff: Date,
-        maximumCount: Int,
-        maximumDiscoveryEntries: Int) -> RecentSessionSelection?
+        limits: GrokLocalSessionScanLimits,
+        checkCancellation: () throws -> Void) -> RecentSessionSelection?
     {
         guard let rootEnum = fileManager.enumerator(
             at: root,
@@ -772,6 +797,8 @@ public enum GrokLocalSessionScanner {
             options: [.skipsHiddenFiles])
         else { return nil }
 
+        let maximumCount = limits.maximumSessions
+        let maximumDiscoveryEntries = limits.maximumDiscoveryEntries
         var sessionModificationDates: [String: Date] = [:]
         var historyCoverageIsEstablished = true
         let trimThreshold = maximumCount > Int.max / 2 ? Int.max : maximumCount * 2
@@ -780,7 +807,7 @@ public enum GrokLocalSessionScanner {
               let url = rootEnum.nextObject() as? URL
         {
             discoveryEntryCount += 1
-            guard !Task.isCancelled else { return nil }
+            guard !self.cancellationRequested(checkCancellation) else { return nil }
             let name = url.lastPathComponent
             guard name == "updates.jsonl" || name == "signals.json" else { continue }
             guard let identity = self.fileIdentity(for: url),
@@ -826,7 +853,8 @@ public enum GrokLocalSessionScanner {
     private static func decodeTurns(
         at url: URL,
         fileSize: Int,
-        limits: GrokLocalSessionScanLimits) -> GrokTurnDecodeResult
+        limits: GrokLocalSessionScanLimits,
+        checkCancellation: @escaping @Sendable () throws -> Void) -> GrokTurnDecodeResult
     {
         var turns: [GrokParsedTurn] = []
         var jsonDecodeCount = 0
@@ -846,9 +874,7 @@ public enum GrokLocalSessionScanner {
                 maxLineBytes: limits.maximumLineBytes,
                 prefixBytes: limits.maximumLineBytes,
                 maxBytesToRead: limits.maximumFileBytes,
-                checkCancellation: {
-                    if Task.isCancelled { throw CancellationError() }
-                },
+                checkCancellation: checkCancellation,
                 onLine: { line in
                     guard line.bytes.range(of: self.turnCompletedNeedle) != nil else { return }
                     jsonDecodeCount += 1

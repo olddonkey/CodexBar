@@ -347,12 +347,10 @@ enum OpenCodexUsageAggregator {
         modelsDevCatalog: ModelsDevCatalog,
         customPricingOverlay: CostUsageCustomPricing) -> Double?
     {
-        // Provider-specific by design: token-only routes lack the request-time credential provenance needed to
-        // decide whether their traffic belongs to a subscription or an API bill. Keep their standalone OpenCodex
-        // rows token-only too instead of attaching a dollar amount that the subscription fan-out intentionally drops.
-        guard OpenCodexRouteDispatcher.route(entry: entry) != .tokenOnly else {
-            return nil
-        }
+        // Provider-specific by design: unknown xAI provenance cannot establish Grok subscription spend.
+        // Other token-only routes still retain standalone catalog and custom pricing.
+        let isXAI = entry.provider.lowercased() == "xai" || entry.model.lowercased().hasPrefix("xai/")
+        if isXAI, entry.credentialSource != .grokOAuth { return nil }
         guard entry.usageStatus == .reported || entry.usageStatus == .estimated else { return nil }
         let usage = entry.usage
         let hasTokenData = entry.resolvedTotalTokens != nil

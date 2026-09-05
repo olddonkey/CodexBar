@@ -182,11 +182,20 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 
 ## OpenCodex usage
 
-OpenCodex `xai` traffic is not merged into the Grok subscription row. The usage log
-does not retain whether each request used Grok OAuth or an xAI API key, and the current
-provider config cannot safely reclassify historical records. The Grok provider and
-**Usage & Spend** therefore use only the native Grok CLI session logs until OpenCodex
-records credential provenance at request time.
+With **Include OpenCodex usage logs** enabled (off by default), **Usage & Spend**
+adds reported Grok OAuth attempts from OpenCodex to the Grok row. This requires an
+OpenCodex version that writes `attempts[].credentialSource: "grok-oauth"` from the
+resolved upstream transport. API-key attempts, historic records without provenance,
+unreported or estimated token counts, and locally answered requests stay excluded.
+Current credentials, inbound API keys, and model names never backfill attribution.
+
+Each physical attempt contributes its own reported token counts, including a metered
+attempt before a combo switches providers. The parent aggregate is not counted again.
+OpenCodex has no recorded dollar amount: its costs use public list prices and remain
+estimates, with separate coverage when combined with native CLI-recorded spend.
+Missing token classes or unknown prices retain tokens without inventing a dollar value.
+The Grok menu continues to use native CLI logs; this opt-in integration is for
+**Usage & Spend**. Neither source is a subscription invoice.
 
 ## JSON-RPC contract
 

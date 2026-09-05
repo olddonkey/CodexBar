@@ -14,6 +14,7 @@
 
 ### Usage & Spend
 - Grok: count completed-turn usage from bounded local CLI session-log scans instead of context-window occupancy, and price it from the spend the CLI recorded, falling back to clearly labeled public xAI list prices where it recorded none; OpenCodex xAI history remains token-only without request-time credential provenance (#3135, #3345). Thanks @olddonkey and @initH271!
+- Usage & Spend: include reported OpenCodex Grok OAuth attempts when log import is enabled and the log records request-time credential provenance. Keep API-key and historic traffic excluded, and label OpenCodex dollars as list-price estimates (#3135). Thanks @olddonkey!
 
 ## 0.56.5 — 2026-09-04
 

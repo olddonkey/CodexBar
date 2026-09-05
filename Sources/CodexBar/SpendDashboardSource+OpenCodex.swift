@@ -111,7 +111,8 @@ extension SpendDashboardSource {
                 supplement,
                 now: request.now,
                 historyDays: self.scanDays,
-                calendar: request.configuration.bucketCalendar),
+                calendar: request.configuration.bucketCalendar,
+                provider: input.provider),
             tokenActivityCache: input.tokenActivityCache,
             sourceKind: input.sourceKind)
     }

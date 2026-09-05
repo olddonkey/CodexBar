@@ -226,20 +226,21 @@ enum OpenCodexUsageAggregator {
             day.tokens += tokens
             day.sawTokens = true
         }
-        day.priced += entry.usageStatus == .reported ? 1 : 0
-        day.estimated += entry.usageStatus == .estimated ? 1 : 0
+        let usesGrokEstimate = entry.credentialSource == .grokOAuth
+        day.priced += entry.usageStatus == .reported && !usesGrokEstimate ? 1 : 0
+        day.estimated += entry.usageStatus == .estimated || usesGrokEstimate ? 1 : 0
         day.unmetered += entry.usageStatus == .unsupported ? 1 : 0
         day.unpriced += entry.usageStatus == .unreported ? 1 : 0
 
         if let cost {
             day.cost += cost
             day.sawCost = true
-        } else if entry.usageStatus == .reported {
+        } else if entry.usageStatus == .reported && !usesGrokEstimate {
             day.unpriced += 1
             if day.priced > 0 {
                 day.priced -= 1
             }
-        } else if entry.usageStatus == .estimated {
+        } else if entry.usageStatus == .estimated || usesGrokEstimate {
             day.unpriced += 1
             if day.estimated > 0 {
                 day.estimated -= 1
@@ -349,7 +350,7 @@ enum OpenCodexUsageAggregator {
         // Provider-specific by design: token-only routes lack the request-time credential provenance needed to
         // decide whether their traffic belongs to a subscription or an API bill. Keep their standalone OpenCodex
         // rows token-only too instead of attaching a dollar amount that the subscription fan-out intentionally drops.
-        guard OpenCodexRouteDispatcher.route(provider: entry.provider, modelName: entry.model) != .tokenOnly else {
+        guard OpenCodexRouteDispatcher.route(entry: entry) != .tokenOnly else {
             return nil
         }
         guard entry.usageStatus == .reported || entry.usageStatus == .estimated else { return nil }
@@ -360,6 +361,9 @@ enum OpenCodexUsageAggregator {
             || usage?.cacheReadTokens != nil
             || usage?.cacheCreationInputTokens != nil
         guard hasTokenData else { return nil }
+        if entry.credentialSource == .grokOAuth, usage?.inputTokens == nil || usage?.outputTokens == nil {
+            return nil
+        }
         let input = usage?.inputTokens ?? 0
         let output = usage?.outputTokens ?? 0
         let cacheRead = usage?.cacheReadTokens ?? 0

@@ -7,6 +7,14 @@ public enum OpenCodexRouteTarget: Equatable, Sendable {
 }
 
 public enum OpenCodexRouteDispatcher {
+    static func route(entry: OpenCodexUsageEntry) -> OpenCodexRouteTarget {
+        // Provider-specific by design: only derived, request-time OAuth attempts enter Grok's subscription.
+        if entry.provider == "xai", entry.credentialSource == .grokOAuth {
+            return .subscription(.grok)
+        }
+        return self.route(provider: entry.provider, modelName: entry.model)
+    }
+
     public static func route(provider: String) -> OpenCodexRouteTarget {
         // Provider-specific by design: OpenCodex provider prefixes map onto subscription rows or token-only spend.
         let providerID = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -14,9 +22,8 @@ public enum OpenCodexRouteDispatcher {
         case "openai":
             return .subscription(.codex)
         case "xai":
-            // usage.jsonl does not retain the credential mode that produced a request. The current config cannot
-            // safely reclassify historical API-key and OAuth traffic, so xAI stays out of the Grok subscription row
-            // until the log carries record-time provenance.
+            // Legacy rows and API-key traffic have no subscription attribution. Only the entry-aware
+            // overload accepts Grok OAuth provenance derived from a physical attempt.
             return .tokenOnly
         case "opencode-go":
             return .subscription(.opencodego)
@@ -33,6 +40,7 @@ public enum OpenCodexRouteDispatcher {
 
     public static func route(modelName: String) -> OpenCodexRouteTarget {
         let trimmed = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Provider-specific by design: OpenCodex bare model selectors default to the Codex subscription.
         guard let slash = trimmed.firstIndex(of: "/") else {
             return .subscription(.codex)
         }
@@ -42,6 +50,7 @@ public enum OpenCodexRouteDispatcher {
     }
 
     public static func countsTowardCodexSubscription(modelName: String) -> Bool {
+        // Provider-specific by design: this public predicate filters explicitly for the Codex subscription.
         if case .subscription(.codex) = self.route(modelName: modelName) {
             return true
         }

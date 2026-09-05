@@ -507,12 +507,10 @@ enum CostUsagePricing {
             // `grok-build-0.1` does not end in `-build` and must remain an exact catalog identity.
             if routeID == "xai",
                modelID.hasPrefix("grok-"),
-               modelID.hasSuffix("-build")
+               modelID.hasSuffix("-build"),
+               modelID.count > "grok-".count + "-build".count
             {
-                let normalized = String(modelID.dropLast("-build".count))
-                if normalized.count > "grok-".count {
-                    targets.append((routeID, normalized))
-                }
+                targets.append((routeID, String(modelID.dropLast("-build".count))))
             }
             if routeID == self.codexModelsDevProviderID {
                 let normalized = self.normalizeCodexModel(modelID)

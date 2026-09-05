@@ -197,6 +197,12 @@ Missing token classes or unknown prices retain tokens without inventing a dollar
 The Grok menu continues to use native CLI logs; this opt-in integration is for
 **Usage & Spend**. Neither source is a subscription invoice.
 
+Standalone OpenCodex reports preserve explicit custom prices for xAI records, including
+API-key and historic usage. Those user-configured estimates do not establish Grok
+subscription attribution. Without a matching override, raw xAI records remain token-only.
+Application price overrides retain bare-model key precedence before provider-qualified
+keys; missing rate fields remain unknown rather than falling back to catalog prices.
+
 ## JSON-RPC contract
 
 - Transport: stdin/stdout, newline-delimited JSON-RPC 2.0 (no Content-Length framing).

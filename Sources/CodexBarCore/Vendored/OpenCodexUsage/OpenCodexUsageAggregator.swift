@@ -338,19 +338,14 @@ enum OpenCodexUsageAggregator {
 
     /// List-price estimate for one entry. Precedence is unchanged from the per-merge pricing it replaces:
     /// 1. `customPricing` — the snapshot's own overlay (provider-scoped rates passed by the caller);
-    /// 2. `CostUsagePricing.codexCostUSD` with the pre-resolved `customPricingOverlay` (the app-level overlay file,
-    ///    which `codexCostUSD` would otherwise re-load per call) and the pre-resolved models.dev `modelsDevCatalog`
-    ///    (otherwise `ModelsDevCache.load` per call), then the bundled/historical tables.
+    /// 2. The pre-resolved app overlay, matching the original model before the provider-qualified model;
+    /// 3. The provider-qualified models.dev lookup, then the bundled/historical tables.
     private static func listPriceUSD(
         entry: OpenCodexUsageEntry,
         customPricing: CostUsageCustomPricing,
         modelsDevCatalog: ModelsDevCatalog,
         customPricingOverlay: CostUsageCustomPricing) -> Double?
     {
-        // Provider-specific by design: unknown xAI provenance cannot establish Grok subscription spend.
-        // Other token-only routes still retain standalone catalog and custom pricing.
-        let isXAI = entry.provider.lowercased() == "xai" || entry.model.lowercased().hasPrefix("xai/")
-        if isXAI, entry.credentialSource != .grokOAuth { return nil }
         guard entry.usageStatus == .reported || entry.usageStatus == .estimated else { return nil }
         let usage = entry.usage
         let hasTokenData = entry.resolvedTotalTokens != nil
@@ -377,6 +372,24 @@ enum OpenCodexUsageAggregator {
             return overlay
         }
         let pricingModel = entry.model.contains("/") ? entry.model : "\(entry.provider)/\(entry.model)"
+        let overlayModel = customPricingOverlay.rates(
+            providerID: CostUsagePricing.codexModelsDevProviderID, model: entry.model) != nil
+            ? entry.model : pricingModel
+        if customPricingOverlay.rates(
+            providerID: CostUsagePricing.codexModelsDevProviderID, model: overlayModel) != nil
+        {
+            // Preserve bare-key precedence, cached-input accounting, and unknown rates in explicit overrides.
+            return customPricingOverlay.estimatedCodexCostUSD(
+                model: overlayModel,
+                inputTokens: input,
+                cachedInputTokens: cacheRead,
+                outputTokens: output,
+                cacheWriteInputTokens: cacheWrite)
+        }
+        // Provider-specific by design: raw xAI rows need an explicit price to establish a standalone estimate.
+        // Subscription attribution remains gated separately by physical Grok OAuth attempts in the fan-out.
+        let isXAI = entry.provider.lowercased() == "xai" || entry.model.lowercased().hasPrefix("xai/")
+        if isXAI, entry.credentialSource != .grokOAuth { return nil }
         return CostUsagePricing.codexCostUSD(
             model: pricingModel,
             inputTokens: input,
@@ -385,7 +398,7 @@ enum OpenCodexUsageAggregator {
             cacheWriteInputTokens: cacheWrite,
             pricingDate: entry.timestamp,
             modelsDevCatalog: modelsDevCatalog,
-            customPricing: customPricingOverlay)
+            customPricing: .empty)
     }
 
     private static func add(_ lhs: Int?, _ rhs: Int?) -> Int? {

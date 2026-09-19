@@ -8,7 +8,7 @@ read_when:
 
 # Providers
 
-CodexBar currently registers 69 provider IDs. Some companies expose multiple surfaces, such as Codex vs OpenAI API or
+CodexBar currently registers 70 provider IDs. Some companies expose multiple surfaces, such as Codex vs OpenAI API or
 OpenCode vs OpenCode Go, because the auth source and quota shape differ.
 
 ## Fetch strategies (current)
@@ -17,7 +17,9 @@ Source labels (CLI/header): `openai-web`, `web`, `oauth`, `api`, `local`, `cli`,
 
 Cookie-based providers expose a Cookie source picker (Automatic or Manual) in Settings → Providers.
 Some browser cookie imports are cached in Keychain and reused until the session is invalid. API keys, manual cookie
-headers, source selection, provider ordering, and token accounts are stored in `~/.codexbar/config.json`.
+headers, source selection, provider ordering, and token accounts are stored in the resolved config file.
+New installs use `~/.config/codexbar/config.json`; existing `~/.codexbar/config.json` installs retain that legacy path.
+See [CLI configuration](cli-configuration.md) for `XDG_CONFIG_HOME` and `CODEXBAR_CONFIG` overrides.
 
 ## Usage & Spend settings
 
@@ -25,7 +27,8 @@ Settings → Usage & Spend is a local estimated-cost history page, not a billing
 card. Range choices are 7 / 30 / 90 days and All (the scan window is 365 days). Amounts are list-price equivalents
 unless a source also reports plan-metered spend, in which case both columns appear. Day buckets use a pinned IANA
 timezone stored when cost tracking is first enabled. Heatmap and ledger dates remain aligned to local calendar
-days across daylight-saving transitions, including zones where midnight is skipped.
+days across daylight-saving transitions, including zones where midnight is skipped. Coverage counts civil days,
+and daily/hourly chart labels use the bucket time zone. Their ranges end at the next local day boundary rather than a fixed 24 hours.
 
 Regular token-history publications also refresh outdated independent Usage & Spend sources, including Claude,
 through their own 365-day scan. The dashboard never substitutes the shorter menu history for that scan. Updates
@@ -90,6 +93,7 @@ complete when the available scan window covers fewer days.
 | ZoomMate | Chrome cookie auto-import + cookie-to-token minting, or manual cURL capture, for the credits/status API (`web`). |
 | Warp | API token (config/env) → GraphQL request limits (`api`). |
 | ElevenLabs | API key from config/env → subscription usage API (`api`). |
+| [Nous Portal](nous.md) | Read-only Hermes login or explicit access token → bundled plugin for monthly credits and top-up balances (`api`). |
 | Windsurf | Web session bundle from browser localStorage (`web`) → local SQLite cache (`local`). |
 | Ollama | API key verifies Cloud API access (`api`); browser cookies expose Cloud quota windows (`web`). |
 | Synthetic | API key from config/env → quota API (`api`). |
@@ -224,7 +228,7 @@ complete when the available scan window covers fewer days.
 - Web API via browser cookies (`cursor.com` + `cursor.sh`).
 - Fallbacks: a legacy stored session, then Cursor.app local auth.
 - Add Account and Switch Account open Cursor's authenticator in a supported browser; Switch Account prefers stable account IDs and falls back to normalized email when IDs are unavailable. CodexBar uses the supported system HTTPS handler when possible and otherwise asks the user to choose an eligible supported browser.
-- Grok Bot weekly included usage is a fourth Cursor card bar from `POST /api/dashboard/get-sand-usage-status` (same session). Accounts without a Bot allowance omit the bar.
+- Grok Bot weekly included usage is a fourth Cursor card bar from `POST /api/dashboard/get-sand-usage-status` (same session). Paid 7-day Bot allowances show weekly pace on that extra bar. Accounts without a Bot allowance omit the bar.
 - Status: Statuspage.io (Cursor).
 - Details: `docs/cursor.md`.
 
@@ -412,8 +416,8 @@ provider-specific cookie validation, endpoints, login detection, and error trans
 - Details: `docs/synthetic.md`.
 
 ## OpenRouter
-- API token from `~/.codexbar/config.json` (`providers[].apiKey`) or `OPENROUTER_API_KEY` env var.
-- Reads credits and key rate-limit info from OpenRouter APIs.
+- API token from the resolved CodexBar config (`providers[].apiKey`, default `~/.config/codexbar/config.json`) or `OPENROUTER_API_KEY` env var. Legacy config paths remain supported.
+- Reads regular-key quota from `/key` and attempts regular-key credits; a Management API key is required for 30-day Activity spend and is used only for Activity. Credits always use the selected account’s regular key.
 - Shows daily, weekly, and monthly API-key spend when `/api/v1/key` returns those fields.
 - Override base URL with `OPENROUTER_API_URL` env var.
 - Status: `https://status.openrouter.ai` (link only, no auto-polling yet).
@@ -457,13 +461,12 @@ provider-specific cookie validation, endpoints, login detection, and error trans
 ## Mistral
 - Session cookie (`ory_session_*`) from browser auto-import or manual `Cookie:` header.
 - Cookie import order: Chrome → Firefox → Safari. Chrome first preserves the original behavior for existing users; Firefox (including Developer Edition) is detected automatically; Safari follows for Full Disk Access users. Other Chromium forks use Manual mode. Automatic import reads only unexpired cookies from the documented Mistral domains.
-- CSRF token (`csrftoken` cookie) sent as `X-CSRFTOKEN` for billing and Vibe usage requests.
-- Domains: `admin.mistral.ai` for API billing and credit balance, and `console.mistral.ai` for optional Vibe subscription usage. Console requests forward only `csrftoken` and `ory_session_*`; all other admin cookies stay origin-bound.
-- Reads monthly usage and pricing from the billing usage endpoint, plus credit balance from the billing credits endpoint, using the Mistral web session.
-- Cost is computed client-side from token counts and response pricing.
-- Reads Vibe monthly-plan usage percentage and reset time when the console endpoint is available.
-- The menu bar metric can show either pay-as-you-go API spend or monthly-plan usage; the provider card shows balance when the credits endpoint is available.
-- Resets at end of calendar month.
+- CSRF token (`csrftoken` cookie) sent as `X-CSRFTOKEN` for billing and fallback Vibe requests.
+- Domains: `admin.mistral.ai` for API billing, included subscription allowances, and credit balance, and `console.mistral.ai` for fallback Vibe usage. Console requests forward only `csrftoken` and `ory_session_*`; all other admin cookies stay origin-bound.
+- Reads monthly usage and pricing from the billing usage endpoint, included API/Vibe allowances from the subscription page, and credit balance from the billing credits endpoint.
+- Cost is computed client-side from token counts and response pricing and remains separate from included allowance usage.
+- The menu bar metric can show pay-as-you-go API spend, included API usage, or Vibe monthly-plan usage; the provider card shows used, total, remaining, and reset details for each available allowance.
+- Allowance reset dates come from Mistral; billing usage is grouped by calendar month.
 - Status: `https://status.mistral.ai` (link only, no auto-polling).
 - Details: `docs/mistral.md`.
 

@@ -737,9 +737,7 @@ extension StatusItemController {
             let cards = self.store.kiloScopeSnapshots.compactMap { scope in
                 self.menuCardModel(
                     for: .kilo,
-                    snapshotOverride: scope.snapshot,
-                    errorOverride: scope.errorMessage,
-                    forceOverrideCard: scope.snapshot == nil)
+                    context: .account(.init(snapshot: scope.snapshot, error: scope.errorMessage)))
             }
             self.addStackedMenuCards(cards, to: menu, context: context)
             self.addFleetAccountMenuCards(fleetProjection.additionalAccounts, to: menu, context: context)
@@ -1117,11 +1115,10 @@ extension StatusItemController {
                     allowDisabled: true,
                     phaseDidChange: { [weak controller, weak menu, settings] _ in
                         guard let controller, let menu else { return }
-                        guard settings.codexVisibleAccountProjection.activeVisibleAccountID == visibleAccountID
-                        else {
-                            return
+                        // Recheck account ownership when scheduling and when the tracking-safe rebuild runs.
+                        controller.scheduleOpenRootMenuDataRebuildIfStillVisible(menu, provider: .codex) {
+                            settings.codexVisibleAccountProjection.activeVisibleAccountID == visibleAccountID
                         }
-                        controller.refreshOpenMenuIfStillVisible(menu, provider: .codex)
                     })
             }
         }
@@ -1247,14 +1244,6 @@ extension StatusItemController {
                 refreshOpenMenus: true,
                 deferOpenParentMenuRebuild: false,
                 allowStaleContentDuringDataRefresh: true)
-        }
-    }
-
-    private func menuNeedsDelayedRefreshRetry(for menu: NSMenu) -> Bool {
-        let providersToCheck = self.delayedRefreshRetryProviders(for: menu)
-        guard !providersToCheck.isEmpty else { return false }
-        return providersToCheck.contains { provider in
-            self.store.needsUsageRefreshRetry(for: provider)
         }
     }
 

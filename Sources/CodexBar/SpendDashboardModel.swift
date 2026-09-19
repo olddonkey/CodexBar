@@ -53,6 +53,8 @@ struct SpendDashboardModel: Equatable, Sendable {
         let coveredDayCount: Int
         let sourceKind: SourceKind
 
+        let incompleteRequestCount: Int
+
         var costDisclaimer: String? {
             // Provider-specific by design: Grok local-session dollars are list-price estimates, not billed spend.
             guard self.provider == .grok, self.totalCost != nil else { return nil }
@@ -67,8 +69,10 @@ struct SpendDashboardModel: Equatable, Sendable {
             totalTokens: Int?,
             totalCost: Double?,
             coveredDayCount: Int,
-            sourceKind: SourceKind = .native)
+            sourceKind: SourceKind = .native,
+            incompleteRequestCount: Int = 0)
         {
+            self.incompleteRequestCount = incompleteRequestCount
             self.id = id
             self.rank = rank
             self.provider = provider
@@ -93,6 +97,8 @@ struct SpendDashboardModel: Equatable, Sendable {
             "\(self.provider.rawValue):\(self.modelName)"
         }
 
+        let incompleteRequestCount: Int
+
         init(
             rank: Int,
             provider: UsageProvider,
@@ -100,8 +106,10 @@ struct SpendDashboardModel: Equatable, Sendable {
             modelName: String,
             totalTokens: Int?,
             totalCost: Double?,
-            tokenMix: CostUsageTokenMix = CostUsageTokenMix())
+            tokenMix: CostUsageTokenMix = CostUsageTokenMix(),
+            incompleteRequestCount: Int = 0)
         {
+            self.incompleteRequestCount = incompleteRequestCount
             self.rank = rank
             self.provider = provider
             self.providerName = providerName
@@ -144,6 +152,7 @@ struct SpendDashboardModel: Equatable, Sendable {
     }
 
     struct DailyProviderRow: Identifiable, Equatable, Sendable {
+        var incompleteRequestCount: Int = 0
         let sourceID: String
         let provider: UsageProvider
         let displayName: String
@@ -156,7 +165,7 @@ struct SpendDashboardModel: Equatable, Sendable {
         }
 
         var isKnownIdle: Bool {
-            self.totalCost == 0 && self.totalTokens == 0 && self.requestCount == 0
+            self.incompleteRequestCount == 0 && self.totalCost == 0 && self.totalTokens == 0 && self.requestCount == 0
         }
     }
 
@@ -166,6 +175,16 @@ struct SpendDashboardModel: Equatable, Sendable {
         let totalTokens: Int?
         let requestCount: Int?
         let totalCost: Double?
+
+        var incompleteRequestCount: Int {
+            CostUsageIncompleteRequests.sum(self.providers.map(\.incompleteRequestCount))
+        }
+
+        var hasPartialCost: Bool {
+            if self.incompleteRequestCount > 0 { return true }
+            let values = self.providers.map(\.totalCost)
+            return values.contains { $0 != nil } && values.contains { $0 == nil }
+        }
 
         var id: Date {
             self.day
@@ -225,6 +244,10 @@ struct SpendDashboardModel: Equatable, Sendable {
         let hourlyPoints: [HourlyPoint]
         let hourlyChartDomain: ClosedRange<Date>?
         let timeZone: TimeZone
+
+        var calendar: Calendar {
+            SpendDashboardModel.gregorianCalendar(timeZone: self.timeZone)
+        }
 
         var id: String {
             self.currencyCode
@@ -419,6 +442,10 @@ struct SpendDashboardModel: Equatable, Sendable {
     }
 
     struct InputSummary {
+        var incompleteRequestCount: Int {
+            CostUsageIncompleteRequests.sum(self.entries.map(\.entry.incompleteRequestCount))
+        }
+
         let input: ProviderInput
         let costMultiplier: Double
         let entries: [WindowEntry]
@@ -497,10 +524,11 @@ struct SpendDashboardModel: Equatable, Sendable {
         let modelSummaries = scopedSummaries.filter { summary in
             let summaryModelHistory = Self.modelSummary(summaries: [summary])
             if summary.totalCost != nil {
-                return summaryModelHistory.completeness == .complete ||
+                return summaryModelHistory.completeness == .complete || summary.incompleteRequestCount > 0 ||
                     Self.canRetainPartialCodexModelHistory(summary)
             }
-            return Self.canRetainUnpricedModelHistory(summary)
+            return Self.canRetainUnpricedModelHistory(summary) ||
+                (summary.incompleteRequestCount > 0 && summary.entries.allSatisfy(\.entry.hasOnlyIncompleteRequests))
         }
         // Unpriced named models can still list. Incomplete priced coverage stays hidden so a
         // partial list cannot look like a lower-bound total.
@@ -642,7 +670,9 @@ struct SpendDashboardModel: Equatable, Sendable {
             ? nil
             : entries.isEmpty
             ? (coveredDayCount > 0 && hasCompleteTokenHistory ? 0 : nil)
-            : Self.completeIntSum(entries.map { Self.nonnegative($0.entry.totalTokens) })
+            : Self.completeIntSum(entries.filter { !$0.entry.hasOnlyIncompleteRequests }.map {
+                Self.nonnegative($0.entry.totalTokens)
+            })
         let hasConsistentCostHistory = Self.hasConsistentCostHistory(input, displayCalendar: calendar)
         let costAggregateIsConsistent = input.snapshot.last30DaysCostUSD == nil || hasConsistentCostHistory
         let invalidCostHistory = hasInvalidCostHistory || !costAggregateIsConsistent
@@ -690,7 +720,8 @@ struct SpendDashboardModel: Equatable, Sendable {
                     totalTokens: entry.element.totalTokens,
                     totalCost: entry.element.totalCost,
                     coveredDayCount: entry.element.coveredDayCount,
-                    sourceKind: entry.element.input.sourceKind)
+                    sourceKind: entry.element.input.sourceKind,
+                    incompleteRequestCount: entry.element.incompleteRequestCount)
             }
     }
 
@@ -811,13 +842,13 @@ struct SpendDashboardModel: Equatable, Sendable {
     }
 
     static func hasProvenZeroCost(_ entry: CostUsageDailyReport.Entry) -> Bool {
-        self.validCost(entry.costUSD) == 0
+        entry.incompleteRequestCount == 0 && self.validCost(entry.costUSD) == 0
             && (entry.modelBreakdowns?.allSatisfy(self.hasProvenZeroCost) ?? true)
     }
 
     static func hasProvenZeroCost(_ breakdown: CostUsageDailyReport.ModelBreakdown) -> Bool {
         let optionalCosts = [breakdown.standardCostUSD, breakdown.priorityCostUSD]
-        return Self.validCost(breakdown.costUSD) == 0
+        return (breakdown.incompleteRequestCount ?? 0) == 0 && Self.validCost(breakdown.costUSD) == 0
             && optionalCosts.allSatisfy { value in
                 value == nil || Self.validCost(value) == 0
             }
@@ -830,14 +861,14 @@ struct SpendDashboardModel: Equatable, Sendable {
             entry.cacheCreationTokens,
             entry.outputTokens,
         ]
-        return Self.nonnegative(entry.totalTokens) == 0
+        return entry.incompleteRequestCount == 0 && Self.nonnegative(entry.totalTokens) == 0
             && optionalTokens.allSatisfy { $0 == nil || Self.nonnegative($0) == 0 }
             && (entry.modelBreakdowns?.allSatisfy(Self.hasProvenZeroTokens) ?? true)
     }
 
     static func hasProvenZeroTokens(_ breakdown: CostUsageDailyReport.ModelBreakdown) -> Bool {
         let optionalTokens = [breakdown.standardTokens, breakdown.priorityTokens]
-        return Self.nonnegative(breakdown.totalTokens) == 0
+        return (breakdown.incompleteRequestCount ?? 0) == 0 && Self.nonnegative(breakdown.totalTokens) == 0
             && optionalTokens.allSatisfy { $0 == nil || Self.nonnegative($0) == 0 }
     }
 
@@ -865,6 +896,7 @@ struct SpendDashboardModel: Equatable, Sendable {
             guard let cost = validCost(entry.costUSD) else {
                 // Provider-specific by design: Codex and Cursor can omit prices on some model/day rows.
                 guard input.snapshot.historyCoverageIsEstablished,
+                      entry.hasOnlyIncompleteRequests ||
                       Self.hasExplicitlyUnpriceableLedgerCost(input.provider, entry)
                 else { return false }
                 continue
@@ -888,7 +920,10 @@ struct SpendDashboardModel: Equatable, Sendable {
                 continue
             }
             guard coverage.contains(day) else { continue }
-            guard let tokens = nonnegative(entry.totalTokens) else { return false }
+            guard let tokens = nonnegative(entry.totalTokens) else {
+                if entry.hasOnlyIncompleteRequests { continue }
+                return false
+            }
             let addition = dailyTotal.addingReportingOverflow(tokens)
             guard !addition.overflow else { return false }
             dailyTotal = addition.partialValue
@@ -933,7 +968,7 @@ struct SpendDashboardModel: Equatable, Sendable {
             let providerRows = indexed.map {
                 Self.dailyProviderRow(summary: $0.summary, entries: $0.entries[day] ?? [])
             }
-            let totalCost = Self.completeCostSum(providerRows.map(\.totalCost))
+            let totalCost = Self.knownCostSum(providerRows.map(\.totalCost))
 
             let sortedRows = providerRows.enumerated().sorted { lhs, rhs in
                 switch (lhs.element.totalCost, rhs.element.totalCost) {
@@ -960,10 +995,12 @@ struct SpendDashboardModel: Equatable, Sendable {
         let costs = entries.map {
             Self.validCost($0.entry.costUSD).map { $0 * summary.costMultiplier }
         }
-        let emptyCost: Double? = summary.entries.isEmpty && summary.totalCost == nil ? nil : 0
+        let emptyCost: Double? = summary.entries.isEmpty && summary.totalCost == nil && summary
+            .totalTokens != 0 ? nil : 0
         let totalCost = summary.hasInvalidCostHistory ? nil : entries.isEmpty ? emptyCost : Self.completeCostSum(costs)
 
         return DailyProviderRow(
+            incompleteRequestCount: CostUsageIncompleteRequests.sum(entries.map(\.entry.incompleteRequestCount)),
             sourceID: summary.input.id,
             provider: summary.input.provider,
             displayName: summary.input.displayName,
@@ -1090,7 +1127,8 @@ struct SpendDashboardModel: Equatable, Sendable {
                 continue
             }
             guard coveredInterval?.contains(day) == true else { continue }
-            guard let tokens = Self.nonnegative(entry.totalTokens) else {
+            // Heatmap coverage requires complete days; detailed daily/model rows retain known subtotals.
+            guard entry.incompleteRequestCount == 0, let tokens = Self.nonnegative(entry.totalTokens) else {
                 invalidDays.insert(day)
                 continue
             }
@@ -1158,7 +1196,7 @@ struct SpendDashboardModel: Equatable, Sendable {
     }
 
     private static func chartDomain(bounds: ClosedRange<Date>, calendar: Calendar) -> ClosedRange<Date> {
-        let end = calendar.date(byAdding: .day, value: 1, to: bounds.upperBound) ?? bounds.upperBound
+        let end = calendar.dateInterval(of: .day, for: bounds.upperBound)?.end ?? bounds.upperBound
         return bounds.lowerBound...end
     }
 
@@ -1206,8 +1244,11 @@ struct SpendDashboardModel: Equatable, Sendable {
     }
 
     private static func dayCount(in interval: ClosedRange<Date>?, calendar: Calendar) -> Int {
-        guard let interval else { return 0 }
-        return (calendar.dateComponents([.day], from: interval.lowerBound, to: interval.upperBound).day ?? 0) + 1
+        guard let interval,
+              let first = calendar.ordinality(of: .day, in: .era, for: interval.lowerBound),
+              let last = calendar.ordinality(of: .day, in: .era, for: interval.upperBound)
+        else { return 0 }
+        return last - first + 1
     }
 
     private static func day(
@@ -1282,13 +1323,7 @@ struct SpendDashboardModel: Equatable, Sendable {
 
     private static func safeIntSum(_ values: [Int]) -> Int? {
         guard !values.isEmpty else { return nil }
-        var result = 0
-        for value in values {
-            let addition = result.addingReportingOverflow(value)
-            guard !addition.overflow else { return nil }
-            result = addition.partialValue
-        }
-        return result
+        return CheckedSum.integers(values)
     }
 
     private static func completeIntSum(_ values: [Int?]) -> Int? {
@@ -1413,8 +1448,7 @@ struct SpendDashboardModel: Equatable, Sendable {
     {
         if let selectedDay {
             let start = calendar.startOfDay(for: selectedDay)
-            let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
-            return start...end
+            return Self.chartDomain(bounds: start...start, calendar: calendar)
         }
         guard let first = points.map(\.hour).min(),
               let last = points.map(\.hour).max(),
@@ -1425,16 +1459,22 @@ struct SpendDashboardModel: Equatable, Sendable {
 }
 
 extension SpendDashboardModel.CurrencyGroup {
+    var incompleteRequestCount: Int {
+        CostUsageIncompleteRequests.sum(self.providers.map(\.incompleteRequestCount))
+    }
+
     var pricedProviderCount: Int {
         self.providers.count { $0.totalCost != nil }
     }
 
     var hasPartialCost: Bool {
+        if self.incompleteRequestCount > 0 { return true }
         let values = self.providers.map(\.totalCost)
         return values.contains { $0 != nil } && values.contains { $0 == nil }
     }
 
     var hasPartialTokens: Bool {
+        if self.incompleteRequestCount > 0 { return true }
         let values = self.providers.map(\.totalTokens)
         return values.contains { $0 != nil } && values.contains { $0 == nil }
     }

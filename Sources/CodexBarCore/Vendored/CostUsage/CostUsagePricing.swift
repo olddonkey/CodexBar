@@ -479,6 +479,47 @@ enum CostUsagePricing {
     static let xaiModelsDevProviderIDs: Set<String> = ["xai"]
     private static let claudeModelsDevProviderID = "anthropic"
 
+    /// Returns the provider/model identities that may price a Codex model. Keep this mapping
+    /// shared by direct lookup and unknown-price refresh so a newly downloaded catalog is checked
+    /// under the same identity that was used to resolve the model.
+    static func codexModelsDevPricingTargets(for rawModel: String) -> [(providerID: String, modelID: String)] {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        if let slash = trimmed.firstIndex(of: "/") {
+            let routeID = String(trimmed[..<slash]).lowercased()
+            let modelID = String(trimmed[trimmed.index(after: slash)...])
+            guard !routeID.isEmpty, !modelID.isEmpty,
+                  self.codexCompatibleModelsDevProviderIDs.contains(routeID)
+            else { return [] }
+
+            var targets = ModelsDevPricingTargetResolver.targets(providerID: routeID, modelID: trimmed)
+                .map { ($0.providerID, $0.modelID) }
+            // Provider-specific by design: xAI serves `-build` response aliases at the base model's catalog
+            // rate; `grok-build-0.1` does not end in `-build` and must remain an exact catalog identity.
+            if routeID == "xai",
+               modelID.hasPrefix("grok-"),
+               modelID.hasSuffix("-build"),
+               modelID.count > "grok-".count + "-build".count
+            {
+                targets.append((routeID, String(modelID.dropLast("-build".count))))
+            }
+            if routeID == self.codexModelsDevProviderID {
+                let normalized = self.normalizeCodexModel(modelID)
+                if normalized != modelID {
+                    targets.append((self.codexModelsDevProviderID, normalized))
+                }
+            }
+            return targets
+        }
+
+        let normalized = self.normalizeCodexModel(trimmed)
+        var targets = [(self.codexModelsDevProviderID, trimmed)]
+        if normalized != trimmed {
+            targets.append((self.codexModelsDevProviderID, normalized))
+        }
+        return targets
+    }
+
     static func normalizeCodexModel(_ raw: String) -> String {
         var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("openai/") {
@@ -805,17 +846,18 @@ enum CostUsagePricing {
             + Double(max(0, tokens.output)) * outputRate
     }
 
-    private static func claudeCostUSD(
-        pricing: ModelsDevPricingInfo,
-        tokens: ClaudeCostTokens) -> Double
-    {
-        self.claudeCostUSD(
+    private static func claudeCostUSD(pricing: ModelsDevPricingInfo, tokens: ClaudeCostTokens) -> Double {
+        // Provider-specific by design: OpenAI's threshold also applies to usage recorded by Claude Code.
+        let bundledThreshold = pricing.providerID == self.codexModelsDevProviderID
+            ? self.codex[self.normalizeCodexModel(pricing.modelID)]?.thresholdTokens
+            : nil
+        return self.claudeCostUSD(
             pricing: ClaudePricing(
                 inputCostPerToken: pricing.inputCostPerToken,
                 outputCostPerToken: pricing.outputCostPerToken,
                 cacheCreationInputCostPerToken: pricing.cacheCreationInputCostPerToken ?? pricing.inputCostPerToken,
                 cacheReadInputCostPerToken: pricing.cacheReadInputCostPerToken ?? pricing.inputCostPerToken,
-                thresholdTokens: pricing.thresholdTokens,
+                thresholdTokens: bundledThreshold ?? pricing.thresholdTokens,
                 inputCostPerTokenAboveThreshold: pricing.inputCostPerTokenAboveThreshold,
                 outputCostPerTokenAboveThreshold: pricing.outputCostPerTokenAboveThreshold,
                 cacheCreationInputCostPerTokenAboveThreshold: pricing.cacheCreationInputCostPerTokenAboveThreshold,

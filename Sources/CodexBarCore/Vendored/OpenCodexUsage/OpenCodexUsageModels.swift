@@ -175,7 +175,17 @@ public enum OpenCodexUsageLog {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL?
     {
-        self.rootURL(environment: environment, homeDirectory: homeDirectory)?
+        if let override = environment["OPENCODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty
+        {
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("usage.jsonl", isDirectory: false)
+        }
+        if TestProcessSafety.isRunning || TestProcessSafety.isRunningUnderTests(environment: environment) {
+            return nil
+        }
+        return homeDirectory
+            .appendingPathComponent(".opencodex", isDirectory: true)
             .appendingPathComponent("usage.jsonl", isDirectory: false)
     }
 
@@ -188,48 +198,5 @@ public enum OpenCodexUsageLog {
             .appendingPathComponent("CodexBar", isDirectory: true)
             ?? AppGroupSupport.localFallbackDirectory(fileManager: fileManager)
         return codexBarRoot.appendingPathComponent("opencodex-usage", isDirectory: true)
-    }
-
-    private static func rootURL(
-        environment: [String: String],
-        homeDirectory: URL) -> URL?
-    {
-        if let override = environment["OPENCODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !override.isEmpty
-        {
-            return URL(fileURLWithPath: override, isDirectory: true)
-        }
-        if Self.isRunningTests(environment) || Self.isRunningTests(ProcessInfo.processInfo.environment) {
-            return nil
-        }
-        return homeDirectory.appendingPathComponent(".opencodex", isDirectory: true)
-    }
-
-    private static func isRunningTests(_ environment: [String: String]) -> Bool {
-        let keys = [
-            "XCTestConfigurationFilePath",
-            "XCTestBundlePath",
-            "XCTestSessionIdentifier",
-            "SWIFT_TESTING_ENABLED",
-            "TESTING_LIBRARY_VERSION",
-            "SWIFT_TESTING",
-        ]
-        if keys.contains(where: { environment[$0] != nil }) {
-            return true
-        }
-        if keys.contains(where: { ProcessInfo.processInfo.environment[$0] != nil }) {
-            return true
-        }
-        if NSClassFromString("XCTestCase") != nil {
-            return true
-        }
-        #if os(macOS)
-        return Bundle.allBundles.contains { $0.bundlePath.hasSuffix(".xctest") }
-        #else
-        // Bundle.allBundles crashes on Linux (swift-corelibs-foundation). SwiftPM
-        // builds test executables with a `.xctest` suffix, so detect the test
-        // process from the main executable instead of enumerating bundles.
-        return Bundle.main.executableURL?.path.hasSuffix(".xctest") ?? false
-        #endif
     }
 }

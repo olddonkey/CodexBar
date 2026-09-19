@@ -116,10 +116,10 @@ extension StatusMenuTests {
             statusBar: self.makeStatusBarForTesting())
         defer { controller.releaseStatusItemsForTesting() }
 
-        let model = try #require(controller.menuCardModel(
+        let model = controller.store.menuCardModel(
             for: .grok,
-            snapshotOverride: UsageSnapshot(primary: nil, secondary: nil, updatedAt: now),
-            forceOverrideCard: true))
+            context: .account(.init(snapshot: UsageSnapshot(primary: nil, secondary: nil, updatedAt: now))),
+            now: now)
         #expect(model.tokenUsage == nil)
     }
 }

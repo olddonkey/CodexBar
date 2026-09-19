@@ -23,6 +23,9 @@ extension SettingsStore {
     /// stay passive until the user explicitly selects one again.
     func effectiveSelectedTokenAccount(for provider: UsageProvider) -> ProviderTokenAccount? {
         let support = TokenAccountSupportCatalog.support(for: provider)
+        if support?.passiveSourceModes.contains(self.providerConfig(for: provider)?.source ?? .auto) == true {
+            return nil
+        }
         if support?.selectedAccountRequiresManualCookieSource == true,
            (self.providerConfig(for: provider)?.cookieSource ?? .auto) == .auto
         {
@@ -111,7 +114,8 @@ extension SettingsStore {
         externalIdentifier: String?? = nil,
         usageScope: String?? = nil,
         organizationID: String?? = nil,
-        workspaceID: String?? = nil)
+        workspaceID: String?? = nil,
+        seatCreditEntitlement: String?? = nil)
     {
         guard let data = self.tokenAccountsData(for: provider), !data.accounts.isEmpty else { return }
         guard let index = data.accounts.firstIndex(where: { $0.id == accountID }) else { return }
@@ -151,6 +155,13 @@ extension SettingsStore {
         } else {
             resolvedWorkspaceID = existing.workspaceID
         }
+        let resolvedSeatCreditEntitlement: String?
+        if let seatCreditEntitlement {
+            let trimmed = seatCreditEntitlement?.trimmingCharacters(in: .whitespacesAndNewlines)
+            resolvedSeatCreditEntitlement = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        } else {
+            resolvedSeatCreditEntitlement = existing.seatCreditEntitlement
+        }
         let updatedAccount = ProviderTokenAccount(
             id: existing.id,
             label: (trimmedLabel?.isEmpty == false) ? trimmedLabel! : existing.label,
@@ -160,7 +171,8 @@ extension SettingsStore {
             externalIdentifier: resolvedIdentifier,
             usageScope: resolvedUsageScope,
             organizationID: resolvedOrganizationID,
-            workspaceID: resolvedWorkspaceID)
+            workspaceID: resolvedWorkspaceID,
+            seatCreditEntitlement: resolvedSeatCreditEntitlement)
 
         var accounts = data.accounts
         accounts[index] = updatedAccount
@@ -221,13 +233,6 @@ extension SettingsStore {
             ])
     }
 
-    func ensureTokenAccountsLoaded() {
-        if self.tokenAccountsLoaded {
-            return
-        }
-        self.tokenAccountsLoaded = true
-    }
-
     func reloadTokenAccounts() {
         let log = CodexBarLog.logger(LogCategories.tokenAccounts)
         let accounts: [UsageProvider: ProviderTokenAccountData]
@@ -243,7 +248,6 @@ extension SettingsStore {
             log.error("Failed to reload token accounts: \(error)")
             return
         }
-        self.tokenAccountsLoaded = true
         self.updateProviderTokenAccounts(accounts)
     }
 

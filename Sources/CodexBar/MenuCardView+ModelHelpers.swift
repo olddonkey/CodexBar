@@ -348,6 +348,7 @@ extension UsageMenuCardView.Model {
             self.providerDetails.isEmpty &&
             self.openAIAPIUsage == nil &&
             self.inlineUsageDashboard == nil &&
+            self.limitResetCredits == nil &&
             self.creditsRemaining == nil &&
             self.providerCost == nil &&
             self.tokenUsage == nil &&
@@ -360,7 +361,7 @@ extension UsageMenuCardView.Model {
             !self.providerDetails.isEmpty ||
             self.openAIAPIUsage != nil ||
             self.inlineUsageDashboard != nil ||
-            self.codexResetCredits != nil ||
+            self.limitResetCredits != nil ||
             self.placeholder != nil
     }
 
@@ -371,14 +372,14 @@ extension UsageMenuCardView.Model {
             self.usageNotes.isEmpty &&
             self.providerDetails.isEmpty &&
             self.openAIAPIUsage == nil &&
-            self.codexResetCredits == nil &&
+            self.limitResetCredits == nil &&
             self.placeholder == nil
     }
 
     var usesStackedDetailLayout: Bool {
         !self.metrics.isEmpty ||
             self.creditsText != nil ||
-            self.codexResetCredits != nil ||
+            self.limitResetCredits != nil ||
             self.providerCost != nil ||
             self.tokenUsage != nil
     }
@@ -409,13 +410,14 @@ extension UsageMenuCardView.Model {
               self.usageNotes == candidate.usageNotes,
               self.providerDetails == candidate.providerDetails,
               (self.openAIAPIUsage == nil) == (candidate.openAIAPIUsage == nil),
+              self.creditsShowProgress == candidate.creditsShowProgress,
               Self.hasCompatibleCreditsLayout(
                   currentText: self.creditsText,
                   currentRemaining: self.creditsRemaining,
                   candidateText: candidate.creditsText,
                   candidateRemaining: candidate.creditsRemaining),
               self.creditsHintText == candidate.creditsHintText,
-              Self.hasCompatibleCodexResetCreditsLayout(self.codexResetCredits, candidate.codexResetCredits),
+              Self.hasCompatibleLimitResetCreditsLayout(self.limitResetCredits, candidate.limitResetCredits),
               self.placeholder == candidate.placeholder,
               Self.hasCompatibleDashboardLayout(self.inlineUsageDashboard, candidate.inlineUsageDashboard),
               Self.hasCompatibleProviderCostLayout(self.providerCost, candidate.providerCost),
@@ -428,9 +430,9 @@ extension UsageMenuCardView.Model {
         return zip(self.metrics, candidate.metrics).allSatisfy(Self.hasCompatibleMetricLayout)
     }
 
-    private static func hasCompatibleCodexResetCreditsLayout(
-        _ current: CodexResetCreditsPresentation?,
-        _ candidate: CodexResetCreditsPresentation?) -> Bool
+    private static func hasCompatibleLimitResetCreditsLayout(
+        _ current: LimitResetCreditsPresentation?,
+        _ candidate: LimitResetCreditsPresentation?) -> Bool
     {
         // The hosted section has a fixed shape; its count and expiry strings can update in place.
         (current == nil) == (candidate == nil)
@@ -539,6 +541,7 @@ extension UsageMenuCardView.Model {
         input: Input,
         snapshot: UsageSnapshot) -> (primary: String, secondary: String, tertiary: String, showsTertiary: Bool)
     {
+        let presentation = ProviderDescriptorRegistry.descriptor(for: input.provider).presentation
         if input.provider == .factory, snapshot.tertiary != nil {
             return (L("5-hour"), L("Weekly"), L("Monthly"), true)
         }
@@ -560,7 +563,7 @@ extension UsageMenuCardView.Model {
         } else if input.provider == .ollama {
             OllamaProviderDescriptor.primaryLabel(window: snapshot.primary) ?? input.metadata.sessionLabel
         } else {
-            input.metadata.sessionLabel
+            presentation.rateWindowLabels(metadata: input.metadata, snapshot: snapshot, now: input.now).primary
         }
         let secondaryLabel = if input.provider == .amp {
             AmpProviderDescriptor.secondaryLabel(snapshot: snapshot) ?? input.metadata.weeklyLabel
@@ -905,6 +908,7 @@ extension UsageMenuCardView.Model {
         percentStyle: PercentStyle) -> [Metric]
     {
         guard let extraRateWindows = snapshot.extraRateWindows else { return [] }
+        let menuCard = ProviderDescriptorRegistry.descriptor(for: input.provider).presentation.menuCard
         // Codex additional limits (e.g. Codex Spark) are optional extra usage and follow the
         // "optional credits and extra usage" setting. Other providers' extra windows (Antigravity
         // per-model quotas, Factory core windows, etc.) are core data and must always render.
@@ -933,10 +937,11 @@ extension UsageMenuCardView.Model {
             let resolvedResetText = Self.extraRateWindowResetText(
                 namedWindow: namedWindow,
                 input: input)
-            let resetText = input.provider == .sub2api && namedWindow.window.resetsAt == nil
+            let usesResetDetail = menuCard.extraRateWindowShowsResetDescriptionAsDetail(namedWindow)
+            let resetText = usesResetDetail && namedWindow.window.resetsAt == nil
                 ? nil
                 : resolvedResetText
-            let detailText: String? = if input.provider == .sub2api {
+            let detailText: String? = if usesResetDetail {
                 namedWindow.window.resetDescription
             } else {
                 nil
@@ -1065,10 +1070,13 @@ extension UsageMenuCardView.Model {
         window: RateWindow,
         input: Input) -> PaceDetail?
     {
-        if provider == .claude, window.windowMinutes != 10080 {
+        // Provider-specific by design: extra-window pacing covers Codex, Claude, Antigravity, and Cursor 7-day extras.
+        if provider == .claude || provider == .cursor, window.windowMinutes != 10080 {
             return nil
         }
-        guard provider == .codex || provider == .claude || provider == .antigravity else { return nil }
+        guard provider == .codex || provider == .claude || provider == .antigravity || provider == .cursor else {
+            return nil
+        }
         switch window.windowMinutes {
         case 300:
             return self.sessionPaceDetail(

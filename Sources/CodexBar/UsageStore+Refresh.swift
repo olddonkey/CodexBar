@@ -341,7 +341,7 @@ extension UsageStore {
             await self.refreshCodexVisibleAccountsForMenu(generation: generation)
             return nil
         } else if provider == .codex {
-            self.codexAccountSnapshots = []
+            self.reconcileCodexWidgetAccountSnapshots()
         }
 
         if provider == .kilo, self.shouldFanOutKiloScopes() {
@@ -767,6 +767,7 @@ extension UsageStore {
                 backfilled: backfilled,
                 result: result,
                 context: context)
+            self.emitUsageUpdatedHook(provider: provider, snapshot: backfilled, rateKey: warningAccountDiscriminator)
             return backfilled
         }
         guard let backfilled else { return }
@@ -840,6 +841,9 @@ extension UsageStore {
         self.bindCodexFailurePublicationOwner(
             provider: provider,
             expectedGuard: context.codexExpectedGuard)
+        if provider == .codex {
+            self.reconcileCodexWidgetAccountSnapshots(after: error)
+        }
         self.lastFetchAttempts[provider.instanceID] = attempts
         self.recordStartupConnectivityRetryableFailure(error)
         await self.handleProviderFetchFailure(
@@ -1591,28 +1595,5 @@ extension UsageStore {
             ClaudeWebAPIFetcher.FetchError.unauthorized.localizedDescription,
             ClaudeWebAPIFetcher.FetchError.cloudflareChallenge.localizedDescription,
         ].contains(error.localizedDescription)
-    }
-
-    nonisolated static func isPermissionPromptWaiting(_ error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
-        return (message.contains("prompt") && message.contains("waiting")) ||
-            message.contains("permission prompt") ||
-            message.contains("folder trust prompt")
-    }
-
-    private func postPermissionPromptNotificationIfNeeded(provider: UsageProvider, error: Error) {
-        let now = Date()
-        if let last = self.lastPermissionPromptNotificationAt[provider.instanceID],
-           now.timeIntervalSince(last) < 10 * 60
-        {
-            return
-        }
-        self.lastPermissionPromptNotificationAt[provider.instanceID] = now
-        let providerName = ProviderDescriptorRegistry.descriptor(for: provider).metadata.displayName
-        AppNotifications.shared.post(
-            idPrefix: "permission-prompt-\(provider.rawValue)",
-            title: L("%@ is waiting for permission", providerName),
-            body: error.localizedDescription,
-            soundEnabled: false)
     }
 }

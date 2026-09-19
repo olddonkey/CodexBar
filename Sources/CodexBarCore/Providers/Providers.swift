@@ -89,6 +89,10 @@ public enum UsageProvider: String, CaseIterable, Sendable, Codable {
     case notion
     case ibmbob
     case nous
+    case muse
+    case coderabbit
+    case replicate
+    case huggingface
 }
 
 // swiftformat:enable sortDeclarations

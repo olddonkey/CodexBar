@@ -126,11 +126,11 @@ All provider fields are optional unless noted.
 - `enabled`: enable/disable provider (defaults to provider default).
 - `source`: preferred source mode.
   - `auto|web|cli|oauth|api`
-  - `auto` uses provider-specific fallback order (see `docs/providers.md`).
+  - `auto` uses [provider-specific fallback order](providers.md#fetch-strategies-current).
   - `api` uses the provider's API-backed mode; only some providers consume the `apiKey` field.
 - `apiKey`: raw API token for providers that support config-backed direct API usage.
 - `enterpriseHost`: provider-specific API host/base URL override. Used by Azure OpenAI, Copilot, LLM Proxy, LiteLLM,
-  ClawRouter, and Wayfinder.
+  ClawRouter, sub2api, and Wayfinder.
 - `cookieSource`: cookie selection policy.
   - `auto` (browser import), `manual` (use `cookieHeader`), `off` (disable cookies)
 - `cookieHeader`: raw cookie header value (e.g. `key=value; other=...`).
@@ -163,10 +163,10 @@ Example placeholder config:
   "version": 1,
   "providers": [
     {
-      "id": "example-provider",
+      "id": "claude",
       "enabled": true,
       "cookieSource": "manual",
-      "cookieHeader": "session=<REDACTED>; other=<REDACTED>"
+      "cookieHeader": "sessionKey=<REDACTED>"
     }
   ]
 }
@@ -176,8 +176,10 @@ Validate after editing:
 
 ```bash
 codexbar config validate
-codexbar usage --provider example-provider --verbose
 ```
+
+Replace the placeholder with your own cookie before fetching usage with `codexbar usage --provider claude`.
+For another provider, use its registered [ID](provider-ids.md) and the cookie format in its [setup guide](providers.md).
 
 CLI shortcuts:
 
@@ -295,6 +297,9 @@ Opt-in (Settings → iCloud Sync, off by default; requires a signed release buil
 - **Usage snapshots** — per-device current usage per account, so other Macs can show last-known data ("via <Mac> · 1h ago") and accounts discovered on other Macs.
 
 Never synced, by design: `hooks` (sync payloads structurally cannot create or modify hook rules — they execute local binaries), machine-local paths (`claudeSwapExecutablePath`, `codexProfileHomePaths`, `awsProfile`/`awsAuthMode`, `source`, `codexActiveSource`, `cookieSource`), menu-bar layout/geometry, debug settings, usage history, and cost ledgers. A provider is never auto-enabled on a Mac where its required local CLI is missing. Records carry a schema version; older app versions pause sync instead of rewriting newer payloads. The CLI does not talk to CloudKit — the running app watches `config.json`, applies CLI or hand edits locally, and syncs changed provider payloads to the fleet when iCloud sync is enabled. Remote changes written to the file are recognized as app writes and are not echoed back. The app tracks per-provider dirty state and never re-uploads unchanged state at launch.
+
+Atomic replacements by CLI tools or editors remain observable during watcher startup and change callbacks, and
+subsequent in-place edits continue to be detected. App-originated writes retain their self-write suppression.
 
 ## Notes
 - Fields not relevant to a provider are ignored.

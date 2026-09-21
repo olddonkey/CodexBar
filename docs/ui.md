@@ -8,14 +8,14 @@ read_when:
 # UI & icon
 
 ## Settings
+- General → Preferred Currency supports Turkish lira (`TRY`, `₺`) alongside the existing currencies, using the shared daily exchange rates and offline fallback for cost estimates.
 - General → Default terminal supports installed Terminal, iTerm, Ghostty, and stable Warp. Terminal is the default and fallback. Warp launches target its app directly and use owner-only temporary tab configs, removed after one minute; interrupted-launch leftovers are cleaned on the next app start.
 - Provider → Visible usage items includes titled provider detail sections. Choices persist across language changes and apply to provider cards and Overview. Untitled details remain visible; cost-summary sections stay controlled by their existing display setting.
 - The empty SwiftUI Settings placeholder is dismissed once per presentation. Retained hidden windows are left alone; the real Settings window remains reusable.
 - Usage & Spend heatmap tooltips prefer the space above the hovered cell and stay within the grid, falling below when needed. On narrow grids they compact vertically and may overlap cells; keyboard selection remains available in the daily grid.
 - Both the application menu and status menu open About in the Settings window. An existing Settings window is reused
   and switches to the About pane.
-- Homebrew-managed installs show a Copy button in About for the bare upgrade command. The update instructions
-  also support native text selection; copying does not run an update.
+- Homebrew-managed installs show a compact Updates section in About, with a selectable monospaced upgrade command and a trailing copy control. The control confirms successful copies briefly; copying does not run an update.
 
 ## Menu bar
 - Overview offers Share Usage Snapshot when its Usage & Spend summary has shareable data. The local preview uses the same spend sources, hidden-source choices, calendar, and currency as that summary; Copy Image exports PNG and TIFF without uploading anything.
@@ -112,6 +112,10 @@ model-generic token label while the rendered menu-bar prefix and accessibility l
 - Codex credits can add a separate “Buy Credits…” menu action.
 - Claude capped Extra Usage follows the used/remaining fill preference; spending amounts and “% used” copy stay unchanged.
 - Codex OpenAI web extras: code review remaining and usage breakdown render when dashboard data is attached.
+- Codex and Claude cost cards: a Recent windows list under the daily bars shows each quota window's
+  range, cost, and tokens (Current window, Previous window, N windows ago), split at official and banked resets.
+  Inferred boundaries are labeled estimated; incomplete local subtotals show ≥ and a partial-estimate note.
+  Without weekly reset metadata, the existing calendar cost history remains visible.
 - Token accounts: optional account switcher bar or stacked account cards (up to 6) when multiple manual tokens exist.
 - At four or more accounts, compact stacked rows show each constrained quota (up to two) with its own reset time.
   Healthy rows show the quota with the least remaining capacity. Percentages and resets stay scoped to the same

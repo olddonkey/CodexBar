@@ -275,10 +275,20 @@ extension UsageStore {
         } else {
             nil
         }
+        // Provider-specific by design: DeepSeek and OpenRouter expose their widget value as balance text.
+        let balanceText: String? = switch provider {
+        case .deepseek, .openrouter:
+            StatusItemController.menuBarBalanceDisplayText(provider: provider, snapshot: snapshot)
+        default:
+            nil
+        }
 
+        // Provider-specific by design: Pi's local strategy has no quota measurement; age belongs to its history.
+        let historyUpdatedAt = provider == .pi ? tokenSnapshot?.updatedAt : nil
         return WidgetSnapshot.ProviderEntry(
             provider: provider,
-            updatedAt: snapshot?.updatedAt ?? preservedClaudeUsage?.updatedAt ?? tokenSnapshot?.updatedAt ?? now,
+            updatedAt: historyUpdatedAt ?? snapshot?.updatedAt ?? preservedClaudeUsage?.updatedAt
+                ?? tokenSnapshot?.updatedAt ?? now,
             primary: snapshot?.primary ?? preservedClaudeUsage?.primary,
             secondary: snapshot?.secondary ?? preservedClaudeUsage?.secondary,
             tertiary: snapshot?.tertiary ?? preservedClaudeUsage?.tertiary,
@@ -288,7 +298,8 @@ extension UsageStore {
             tokenUsage: tokenUsage,
             dailyUsage: dailyUsage,
             providerCost: providerCost,
-            quotaOwnerKey: quotaOwnerKey)
+            quotaOwnerKey: quotaOwnerKey,
+            balanceText: balanceText)
     }
 
     private struct PreservedClaudeWidgetUsage {

@@ -148,7 +148,8 @@ extension SpendDashboardSource {
                 calendar: request.configuration.bucketCalendar,
                 provider: input.provider),
             tokenActivityCache: input.tokenActivityCache,
-            sourceKind: input.sourceKind)
+            sourceKind: input.sourceKind,
+            accounting: input.accounting)
     }
 
     static func shouldPublishOpenCodexSnapshot(_ snapshot: CostUsageTokenSnapshot) -> Bool {

@@ -288,9 +288,18 @@ struct GrokAccountContextTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary)
         let session = fixture.home.appendingPathComponent("sessions/project/session", isDirectory: true)
         try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        // Local history comes from completed turns; `signals.json` only carries session metadata, and its
+        // context-window occupancy is never counted as consumed tokens.
         try Data("""
         {"totalTokensBeforeCompaction":40,"contextTokensUsed":2,"primaryModelId":"example-model"}
         """.utf8).write(to: session.appendingPathComponent("signals.json"))
+        let turnAt = Int(Date().timeIntervalSince1970)
+        try Data("""
+        {"timestamp":\(turnAt),"method":"_x.ai/session/update","params":{"sessionId":"session","update":{\
+        "sessionUpdate":"turn_completed","stop_reason":"end_turn","usage":{"inputTokens":40,"outputTokens":2,\
+        "totalTokens":42,"modelCalls":1,"modelUsage":{"example-model":{"inputTokens":40,"outputTokens":2,\
+        "totalTokens":42,"modelCalls":1}}}}}}
+        """.utf8).write(to: session.appendingPathComponent("updates.jsonl"))
         var web = GrokWebFetchStrategy()
         web.remainingResetsLookup = { _, _, _ in .empty }
         let oauth = GrokOAuthFetchStrategy(

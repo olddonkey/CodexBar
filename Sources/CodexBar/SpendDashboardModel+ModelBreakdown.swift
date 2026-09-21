@@ -229,7 +229,8 @@ extension SpendDashboardModel {
         }
     }
 
-    /// Provider-specific by design: Cursor usage events can omit totalCents without voiding priced rows.
+    /// Provider-specific by design: Cursor usage events can omit totalCents without voiding priced rows, and
+    /// Grok's scanner reports the turns it could not price at all as unpriced requests.
     static func hasExplicitlyUnpriceableLedgerCost(
         _ provider: UsageProvider,
         _ entry: CostUsageDailyReport.Entry) -> Bool
@@ -237,9 +238,23 @@ extension SpendDashboardModel {
         switch provider {
         case .codex, .cursor:
             self.hasExplicitlyUnpriceableCodexCost(entry)
+        case .grok:
+            self.hasExplicitlyUnpricedGrokDay(entry)
         default:
             false
         }
+    }
+
+    /// A Grok day carries no cost only when every request in it went unpriced: a turn the CLI attributed to no
+    /// model and recorded no ticks for has nothing to price from either source. The scanner counts those
+    /// requests explicitly, so a costless day whose requests are all unpriced is a declared gap in coverage —
+    /// disclosed through the coverage counts — rather than a history that contradicts its own total.
+    private static func hasExplicitlyUnpricedGrokDay(_ entry: CostUsageDailyReport.Entry) -> Bool {
+        guard validCost(entry.costUSD) == nil,
+              let unpriced = nonnegative(entry.unpricedRequestCount), unpriced > 0,
+              let requests = nonnegative(entry.requestCount)
+        else { return false }
+        return requests == unpriced
     }
 
     private static func hasCompleteModelCostCoverage(_ entry: CostUsageDailyReport.Entry) -> Bool {

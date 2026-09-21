@@ -22,14 +22,13 @@ extension UsageStore {
         guard !daily.isEmpty else { return nil }
         // Tokens and requests are recomputed from the retained days, so the cost has to be too. Copying the
         // published total would render the full 365-day amount beside a 30-day token count.
-        let costs = daily.compactMap(\.costUSD)
 
         return CostUsageTokenSnapshot(
             sessionTokens: published.sessionTokens,
             sessionCostUSD: published.sessionCostUSD,
             sessionRequests: published.sessionRequests,
             last30DaysTokens: CostUsageDailyReport.completeCountSum(daily.map(\.totalTokens)),
-            last30DaysCostUSD: costs.isEmpty ? nil : costs.reduce(0, +),
+            last30DaysCostUSD: GrokLocalSessionSummary.windowCostUSD(for: daily),
             last30DaysRequests: CostUsageDailyReport.completeCountSum(daily.map(\.requestCount)),
             currencyCode: published.currencyCode,
             historyDays: days,
@@ -52,8 +51,9 @@ extension UsageStore {
         return summary.toCostUsageTokenSnapshot(historyDays: historyDays)
     }
 
-    /// Generic window math does not know that Grok's priced rows are CLI-recorded spend. Apply the same
-    /// source-aware disclosure to live publications and scan results as to the remote-backed projection.
+    /// Generic window math does not know that Grok's priced rows are CLI-recorded spend, nor that a costless
+    /// Grok day is a declared unpriced gap rather than an unknown total. Apply the same source-aware total and
+    /// disclosure to live publications and scan results as to the remote-backed projection.
     func narrowedGrokTokenSnapshot(_ published: CostUsageTokenSnapshot, historyDays: Int) -> CostUsageTokenSnapshot {
         let narrowed = published.narrowed(
             toHistoryDays: historyDays,
@@ -63,7 +63,7 @@ extension UsageStore {
             sessionCostUSD: narrowed.sessionCostUSD,
             sessionRequests: narrowed.sessionRequests,
             last30DaysTokens: narrowed.last30DaysTokens,
-            last30DaysCostUSD: narrowed.last30DaysCostUSD,
+            last30DaysCostUSD: GrokLocalSessionSummary.windowCostUSD(for: narrowed.daily),
             last30DaysRequests: narrowed.last30DaysRequests,
             currencyCode: narrowed.currencyCode,
             historyDays: narrowed.historyDays,

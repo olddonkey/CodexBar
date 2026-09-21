@@ -81,6 +81,8 @@ struct GrokWindowProvenanceProofTests: GrokLocalSessionScannerTestSupport {
             primary: nil, secondary: nil, updatedAt: summary.scannedAt.addingTimeInterval(-60))
 
         print("live_full_source=\(published.costProvenance.rawValue)")
+        print("live_full_session_count=\(summary.sessionCount)")
+        print("live_full_history_coverage_established=\(published.historyCoverageIsEstablished)")
         for days in [1, 7, 30] {
             let selected = try #require(store.tokenSnapshotForLiveProviderConsumer(
                 fromProviderSnapshot: remote, provider: .grok, historyDays: days))
@@ -96,7 +98,68 @@ struct GrokWindowProvenanceProofTests: GrokLocalSessionScannerTestSupport {
             print("live_window_cost_usd=\(selected.last30DaysCostUSD.map { String($0) } ?? "nil")")
             print("live_window_source=\(selected.costProvenance.rawValue)")
             print("live_window_priced_days=\(selected.daily.count { $0.costUSD != nil })")
+            // The two shapes that legitimately leave a window without a dashboard total are a bounded scan and
+            // days the scanner could not price at all. Print both so a failing run says which one it hit.
+            print("live_window_active_days=\(selected.daily.count)")
+            print("live_window_unpriced_days=\(selected.daily.count { $0.costUSD == nil })")
+            print("live_window_unpriced_requests=\(selected.daily.reduce(0) { $0 + ($1.unpricedRequestCount ?? 0) })")
+            print("live_window_estimated_requests=\(selected.daily.reduce(0) { $0 + ($1.estimatedRequestCount ?? 0) })")
+            print("live_window_history_coverage_established=\(selected.historyCoverageIsEstablished)")
         }
+    }
+
+    /// A real corpus mixes priced days with days the scanner could not price at all — turns the CLI
+    /// attributed to no model and recorded no ticks for. The scanner reports those as unpriced requests.
+    /// The dashboard must keep the recorded total and disclose the gap, not hide the row.
+    @Test
+    func `unpriced days inside the window keep the recorded total on the dashboard row`() throws {
+        let fixture = try self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let now = Date()
+        let recordedDay = try #require(Calendar.current.date(byAdding: .day, value: -2, to: now))
+        let unpricedDay = try #require(Calendar.current.date(byAdding: .day, value: -5, to: now))
+        let recordedUsage = self.usage(
+            input: 1000,
+            output: 0,
+            modelCalls: 1,
+            costUsdTicks: 10_000_000_000,
+            modelUsage: ["grok-4.6-build": self.modelUsage(input: 1000, output: 0, modelCalls: 1)])
+        let unpricedUsage = self.usage(input: 500, output: 0, modelCalls: 1, modelUsage: [:])
+        try self.writeUpdates(
+            [
+                self.turn(timestamp: unpricedDay, usage: unpricedUsage),
+                self.turn(timestamp: recordedDay, usage: recordedUsage),
+            ],
+            to: fixture.session.appendingPathComponent("updates.jsonl"),
+            modificationDate: now)
+        let summary = try GrokLocalSessionScanner.summarize(
+            env: ["GROK_HOME": fixture.root.path],
+            lookbackDays: 365,
+            now: now,
+            modelsDevCatalog: Self.catalog())
+        let published = try #require(summary.toCostUsageTokenSnapshot(historyDays: 365))
+        let store = Self.makeStore()
+        store.publishTokenSnapshot(published, for: .grok)
+        let remote = UsageSnapshot(primary: nil, secondary: nil, updatedAt: now.addingTimeInterval(-60))
+        let selected = try #require(store.tokenSnapshotForLiveProviderConsumer(
+            fromProviderSnapshot: remote, provider: .grok, historyDays: 30))
+
+        #expect(selected.daily.count == 2)
+        #expect(selected.daily.contains { $0.costUSD == nil && ($0.unpricedRequestCount ?? 0) > 0 })
+        #expect(abs((selected.last30DaysCostUSD ?? 0) - 1) < 1e-12)
+        #expect(selected.costProvenance == .vendorMetered)
+
+        let dashboard = SpendDashboardModel.build(
+            inputs: [.init(provider: .grok, displayName: "Grok", snapshot: selected)],
+            requestedDays: 30,
+            now: selected.updatedAt)
+        let group = try #require(dashboard.groups.first)
+        let row = try #require(group.providers.first)
+        #expect(row.totalCost == 1)
+        #expect(row.costDisclaimer == "Grok CLI-recorded spend, list price where unrecorded · not a bill.")
+        #expect(group.provenance == .vendorMetered)
+        #expect(group.coverage.priced == 1)
+        #expect(group.coverage.unpriced == 1)
     }
 
     private static func verifySurfaces(_ snapshot: CostUsageTokenSnapshot, days: Int) throws {
@@ -113,12 +176,21 @@ struct GrokWindowProvenanceProofTests: GrokLocalSessionScannerTestSupport {
         let group = try #require(dashboard.groups.first)
         let row = try #require(group.providers.first)
         let disclosure = "Grok CLI-recorded spend, list price where unrecorded · not a bill."
-        #expect(menu.hintLine == disclosure)
-        #expect(row.costDisclaimer == disclosure)
-        #expect(row.totalCost == snapshot.last30DaysCostUSD)
-        #expect(group.provenance == snapshot.costProvenance)
+        // The menu appends an incomplete-requests note after the disclosure when a window carries any.
+        #expect(menu.hintLine?.hasPrefix(disclosure) == true)
+        if snapshot.historyCoverageIsEstablished {
+            #expect(row.costDisclaimer == disclosure)
+            #expect(row.totalCost == snapshot.last30DaysCostUSD)
+            #expect(group.provenance == snapshot.costProvenance)
+        } else {
+            // A bounded scan cannot establish coverage, and the dashboard deliberately shows no total for it
+            // rather than presenting a partial history as complete. The menu still shows the scanned window.
+            #expect(row.totalCost == nil)
+            #expect(group.provenance == .unknown)
+        }
         print("window_menu_disclosure=\(menu.hintLine ?? "nil")")
         print("window_dashboard_source=\(group.provenance.rawValue)")
+        print("window_dashboard_total_cost=\(row.totalCost.map { String($0) } ?? "nil")")
     }
 
     private static func makeStore() -> UsageStore {

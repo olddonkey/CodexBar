@@ -152,7 +152,7 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      history window (up to 365 days).
    - Aggregates the recorded per-turn token usage, model breakdown, request count,
      and timestamps. Cost comes from the `costUsdTicks` the CLI recorded for each turn
-     (ticks / 1e10 = USD), which already carries the price tier and any promotional
+     (ticks / 1e10 = USD, as xAI's cost-tracking documentation states), which already carries the price tier and any promotional
      rate. Entries that record no ticks fall back to public xAI list prices and are
      counted as estimated, so a window reports whether it was recorded, estimated, or
      a mix of both. Neither figure is a Grok bill.

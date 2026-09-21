@@ -127,6 +127,21 @@ public struct GrokLocalSessionSummary: Sendable {
 
     /// Grok counts recorded turns as priced and public-card fallbacks as estimated. Only a mixed
     /// snapshot needs these counts to decide which sources survived a window or selected-day filter.
+    /// The window total for a set of Grok days. A Grok day carries no cost only when the scanner could price
+    /// none of its requests, which it declares through `unpricedRequestCount`; that is a disclosed gap in
+    /// coverage, not an unknown total, so the days that were priced still add up. Generic window math treats
+    /// any costless day as making the whole window unknown, which hid real totals behind one unpriced day.
+    public static func windowCostUSD(for daily: [CostUsageDailyReport.Entry]) -> Double? {
+        var total: Double?
+        for entry in daily {
+            guard let cost = entry.costUSD, cost.isFinite, cost >= 0 else { continue }
+            let sum = (total ?? 0) + cost
+            guard sum.isFinite else { return nil }
+            total = sum
+        }
+        return total
+    }
+
     public static func costProvenance(
         for daily: [CostUsageDailyReport.Entry],
         fallback: CostProvenance) -> CostProvenance
@@ -437,7 +452,8 @@ public enum GrokLocalSessionScanner {
     /// gated proof, both landing on `1e10` to four decimals. An earlier reading of this branch used `1e9`,
     /// which happened to equal `1.7 x` the public card on a sample drawn entirely from an xAI promotional
     /// window; the field carries that promotional rate, so reconstructing the same turns from the public card
-    /// overstated them by 5.9x.
+    /// overstated them by 5.9x. xAI's own cost-tracking documentation (docs.x.ai/developers/cost-tracking)
+    /// states that `cost_in_usd_ticks / 1e10` is the billed USD amount, which confirms the measurement.
     static let costUsdTicksPerUSD = 1e10
 
     private static let parseCache = GrokLocalSessionParseCache()

@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Grok: send a nonempty billing request while preserving legacy monthly usage and leaving unknown percentages unchanged (#3336). Thanks @CharlieLZ!
 - CLI: show each host's source snapshot timestamp in SSH cost text reports, making stale remote totals visible without changing JSON output (#3765). Thanks @A-l-an!
 - Packaging: derive app/widget Team IDs from the selected signing identity, reject ambiguous or mismatched identities, and honor the same identity during notarized packaging without weakening widget or signature checks; use Developer ID or ad-hoc signing for local builds (#3372). Thanks @krazybean!
 - Claude/Vertex costs: prevent crashes from oversized local history values, preserving valid token components and finite spend when an aggregate exceeds the cache's numeric range; preserve retained Codex history during the upgrade (#3793).
@@ -23,11 +24,13 @@
 - Linux installation: preserve managed configuration symlinks and UTF-8 glyphs across reinstalls, and recover dangling Omarchy adapter links (#3784). Thanks @jsonMartin!
 - Linux packaging: include executable contents when the selected binary is a symlink, keeping archives self-contained (#3784).
 - OpenCode Go: restore migrated Console quota windows and prepaid Zen balances, preserve independent legacy sessions, and keep missing reset times unknown instead of reporting expired credentials or immediate resets (#3796, fixes #3783). Thanks @kays0x and @NOIPJohnny!
+- Kimi: honor Manual cookie source even when the token is empty or invalid, preventing automatic Desktop or browser credential discovery (#3536, #3537). Thanks @OttoPrua!
 
 ### Improved
 
 - Documentation: link every registered provider from the README and provider index, add ClinePass and OpenCode Go guides, and distinguish historical fork notes from current setup instructions.
 - Usage & Spend: group sources and models by provider, consolidate detail and daily/hourly chart selectors, and add a clear selected-day control while preserving incomplete-history warnings, local-history labels, calendar boundaries, privacy, and exports (#3353). Thanks @Yuxin-Qiao!
+- ElevenLabs: move subscription fetching into the bundled JavaScript plugin on macOS and Linux, preserving credit and voice-slot windows, reset dates, endpoint overrides, and API-key diagnostics while removing the native fetch/parser twin.
 
 ### Development
 

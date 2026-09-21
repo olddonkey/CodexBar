@@ -46,6 +46,26 @@ struct OpenCodexProviderPricingTests {
     }
 
     @Test
+    func `router-hosted xAI models keep their recorded-provider price`() throws {
+        // OpenRouter bills `xai/...` models itself, so the xAI direct-billing gate must not touch them.
+        let catalog = try Self.catalog(routerModel: "xai/grok-fixture")
+        let router = Self.snapshot([Self.entry(provider: "openrouter", model: "xai/grok-fixture")], catalog: catalog)
+        #expect(abs((router.last30DaysCostUSD ?? 0) - 0.00142) < 1e-10)
+        #expect(router.daily.first?.unpricedRequestCount == nil || router.daily.first?.unpricedRequestCount == 0)
+        #expect(router.costProvenance == .listPriceEstimate)
+    }
+
+    @Test
+    func `directly billed xAI rows stay token-only without Grok OAuth provenance`() throws {
+        let catalog = try Self.catalog()
+        for (provider, model) in [("xai", "grok-fixture"), ("openai", "xai/grok-fixture")] {
+            let snapshot = Self.snapshot([Self.entry(provider: provider, model: model)], catalog: catalog)
+            #expect(snapshot.last30DaysCostUSD == nil, "\(provider)/\(model) must not price from the xAI card")
+            #expect(snapshot.daily.first?.unpricedRequestCount == 1)
+        }
+    }
+
+    @Test
     func `router namespace does not fall through to a bare model in the same catalog`() throws {
         let catalog = try Self.catalog(routerModel: "gpt-5.4")
         let snapshot = Self.snapshot(

@@ -326,8 +326,13 @@ enum OpenCodexUsageAggregator {
         }
         // Provider-specific by design: raw xAI rows need an explicit price to establish a standalone estimate.
         // Subscription attribution remains gated separately by physical Grok OAuth attempts in the fan-out.
-        let isXAI = pricingProvider == "xai" || entry.model.lowercased().hasPrefix("xai/")
-        if isXAI, entry.credentialSource != .grokOAuth,
+        // The gate follows the resolved billing route, not the model namespace: a router such as OpenRouter
+        // bills `xai/...` models itself and keeps its recorded-provider price (#3676). Only a row billed by xAI
+        // directly — the `xai` provider, or the legacy OpenAI transport label carrying an xAI route — is held.
+        let isDirectXAIBilling = pricingProvider == "xai"
+            || (pricingProvider == CostUsagePricing.codexModelsDevProviderID
+                && entry.model.lowercased().hasPrefix("xai/"))
+        if isDirectXAIBilling, entry.credentialSource != .grokOAuth,
            customPricingOverlay.rates(providerID: pricingProvider, model: entry.model) == nil
         {
             return nil

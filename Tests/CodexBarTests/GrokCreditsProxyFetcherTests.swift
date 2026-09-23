@@ -759,6 +759,156 @@ struct GrokCreditsProxyFetcherTests {
     }
 }
 
+extension GrokCreditsProxyFetcherTests {
+    @Test
+    func `live weekly credits payload retains product composition`() throws {
+        let now = try Self.date("2026-09-23T00:00:00Z")
+        let payload = [
+            #"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","#,
+            #""start":"2026-09-20T18:42:45.537749+00:00","#,
+            #""end":"2026-09-27T18:42:45.537749+00:00"},"creditUsagePercent":1.0,"onDemandCap":{"val":0},"#,
+            #""onDemandUsed":{"val":0},"productUsage":[{"product":"GrokBuild","usagePercent":1.0}],"#,
+            #""isUnifiedBillingUser":true,"#,
+            #""prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD","#,
+            #""billingPeriodStart":"2026-09-20T18:42:45.537749+00:00","#,
+            #""billingPeriodEnd":"2026-09-27T18:42:45.537749+00:00"}}"#,
+        ].joined()
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data(payload.utf8), now: now)
+
+        #expect(snapshot.usedPercent == 1)
+        #expect(try snapshot.resetsAt == (Self.date("2026-09-27T18:42:45.537749+00:00")))
+        #expect(snapshot.windowMinutes == 10080)
+        #expect(snapshot.productUsage == [GrokProductUsage(product: "GrokBuild", usedPercent: 1)])
+    }
+
+    @Test
+    func `proxy retains product wire order and unknown names`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {"config":{"creditUsagePercent":42,"productUsage":[
+          {"product":"GrokImagine","usagePercent":2.5},
+          {"product":" FutureGrok ","usagePercent":0},
+          {"product":"GrokChat","usagePercent":39.5}
+        ]}}
+        """.utf8))
+
+        #expect(snapshot.productUsage == [
+            GrokProductUsage(product: "GrokImagine", usedPercent: 2.5),
+            GrokProductUsage(product: "FutureGrok", usedPercent: 0),
+            GrokProductUsage(product: "GrokChat", usedPercent: 39.5),
+        ])
+    }
+
+    @Test
+    func `malformed products do not change the weekly total or period`() throws {
+        let now = try Self.date("2026-09-23T00:00:00Z")
+        let base = #"""
+        {"config":{"creditUsagePercent":42,"currentPeriod":{"start":"2026-09-20T00:00:00Z","end":"2026-09-27T00:00:00Z"}
+        """#
+        let baseline = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)}}".utf8), now: now)
+        let cases: [(String, [GrokProductUsage])] = [
+            (#", "productUsage":{}"#, []),
+            (#", "productUsage":"wrong""#, []),
+            (#", "productUsage":[{"product":"GrokBuild","usagePercent":"1"}]"#, []),
+            (#", "productUsage":[{"usagePercent":1}]"#, []),
+            (#", "productUsage":[{"product":"GrokBuild","usagePercent":-1}]"#, []),
+            (#", "productUsage":[{"product":"  ","usagePercent":1}]"#, []),
+            (#", "productUsage":[{"product":"GrokImagine","usagePercent":1e400}]"#, []),
+            (
+                #", "productUsage":[{"product":"GrokChat","usagePercent":2},42]"#,
+                [GrokProductUsage(product: "GrokChat", usedPercent: 2)]),
+        ]
+        for (fragment, expectedProducts) in cases {
+            let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)\(fragment)}}".utf8), now: now)
+            #expect(snapshot.productUsage == expectedProducts)
+            #expect(snapshot.usedPercent == baseline.usedPercent)
+            #expect(snapshot.resetsAt == baseline.resetsAt)
+            #expect(snapshot.windowMinutes == baseline.windowMinutes)
+            #expect(snapshot.subscriptionTier == baseline.subscriptionTier)
+            #expect(snapshot.usedPercentIsWirePublished == baseline.usedPercentIsWirePublished)
+            #expect(snapshot.usedPercentIsImplicitZero == baseline.usedPercentIsImplicitZero)
+        }
+        #expect(baseline.productUsage.isEmpty)
+    }
+
+    @Test
+    func `products survive proxy fallback result branches`() throws {
+        let expected = [GrokProductUsage(product: "GrokBuild", usedPercent: 3)]
+        let cases: [(String, Double?)] = [
+            (#""onDemandCap":{"val":100},"onDemandUsed":{"val":3}"#, 3),
+            (#""billingPeriodEnd":"2026-09-27T00:00:00Z""#, nil),
+        ]
+        for (fields, percent) in cases {
+            let payload = "{\"config\":{\(fields),\"productUsage\":[{\"product\":\"GrokBuild\",\"usagePercent\":3}]}}"
+            let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data(payload.utf8))
+            #expect(snapshot.usedPercent == percent)
+            #expect(snapshot.productUsage == expected)
+        }
+    }
+
+    @Test
+    func `billing snapshot copies keep product composition`() {
+        let products = [GrokProductUsage(product: "GrokBuild", usedPercent: 1)]
+        let proxy = GrokWebBillingSnapshot(usedPercent: 1, resetsAt: nil, productUsage: products)
+        let empty = GrokWebBillingSnapshot(usedPercent: 2, resetsAt: nil)
+        #expect(proxy.applying(subscriptionTier: "SuperGrok").productUsage == products)
+        #expect(empty.completing(with: proxy).productUsage == products)
+        #expect(proxy.completing(with: empty).productUsage == products)
+    }
+
+    @Test
+    func `product details share the primary weekly pool without extra bars`() throws {
+        let products = [
+            GrokProductUsage(product: "GrokBuild", usedPercent: 1),
+            GrokProductUsage(product: "GrokChat", usedPercent: 5),
+            GrokProductUsage(product: "GrokImagine", usedPercent: 0),
+            GrokProductUsage(product: " FutureGrok ", usedPercent: 0.2),
+            GrokProductUsage(product: "GrokAppBuilder", usedPercent: 5),
+        ]
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let usage = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(usedPercent: 11.2, resetsAt: nil, productUsage: products),
+            credentials: nil,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: now).toUsageSnapshot()
+        let section = try #require(usage.details.first)
+
+        #expect(usage.primary?.usedPercent == 11.2)
+        #expect(usage.details.count == 1)
+        #expect(section.title == "Usage breakdown")
+        #expect(section.rows.map(\.id) == [
+            "grok.product.GrokChat", "grok.product.GrokAppBuilder", "grok.product.GrokBuild",
+            "grok.product.FutureGrok",
+        ])
+        #expect(section.rows.map(\.label) == ["Grok Chat", "Grok App Builder", "Grok Build", "FutureGrok"])
+        #expect(section.rows.map(\.value) == ["5%", "5%", "1%", "<1%"])
+        #expect(section.rows.allSatisfy { $0.progress == nil && $0.secondaryValue == nil })
+        #expect(usage.secondary == nil)
+        #expect(usage.tertiary == nil)
+        #expect(usage.extraRateWindows?.isEmpty != false)
+        #expect(GrokProductUsageDetails.sections(for: []).isEmpty)
+
+        let empty = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(usedPercent: 11.2, resetsAt: nil),
+            credentials: nil,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: now).toUsageSnapshot()
+        let unknown = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(usedPercent: nil, resetsAt: nil, productUsage: products),
+            credentials: nil,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: now).toUsageSnapshot()
+        #expect(empty.details.isEmpty)
+        #expect(unknown.primary == nil)
+        #expect(unknown.details.isEmpty)
+    }
+}
+
 private final class EventRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String] = []

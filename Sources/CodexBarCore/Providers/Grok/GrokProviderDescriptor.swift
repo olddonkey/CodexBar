@@ -33,6 +33,16 @@ public enum GrokProviderDescriptor {
         #endif
     }
 
+    fileprivate static func withResetCreditDetails(
+        usage: UsageSnapshot,
+        resetCredits: GrokRateLimitResetCreditsSnapshot?,
+        now: Date) -> UsageSnapshot
+    {
+        let enriched = usage.withGrokResetCredits(resetCredits)
+        let resetSections = GrokRemainingResetsFetcher.detailSections(snapshot: resetCredits, now: now)
+        return enriched.replacing(details: .value(resetSections + enriched.details))
+    }
+
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .grok,
@@ -210,12 +220,10 @@ struct GrokCLIFetchStrategy: ProviderFetchStrategy {
             at: snapshot.updatedAt,
             requiresCompleteness: context.requiresOptionalUsageCompleteness)
         return self.makeResult(
-            usage: usage
-                .withGrokResetCredits(resetResolution.snapshot)
-                .replacing(details: .value(
-                    GrokRemainingResetsFetcher.detailSections(
-                        snapshot: resetResolution.snapshot,
-                        now: snapshot.updatedAt))),
+            usage: GrokProviderDescriptor.withResetCreditDetails(
+                usage: usage,
+                resetCredits: resetResolution.snapshot,
+                now: snapshot.updatedAt),
             sourceLabel: "grok-cli",
             supplementalUsageTask: resetResolution.supplementalUsageTask,
             diagnostic: snapshot.diagnostic)
@@ -539,12 +547,10 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
             at: snapshot.updatedAt,
             requiresCompleteness: context.requiresOptionalUsageCompleteness)
         return self.makeResult(
-            usage: usage
-                .withGrokResetCredits(resetResolution.snapshot)
-                .replacing(details: .value(
-                    GrokRemainingResetsFetcher.detailSections(
-                        snapshot: resetResolution.snapshot,
-                        now: snapshot.updatedAt))),
+            usage: GrokProviderDescriptor.withResetCreditDetails(
+                usage: usage,
+                resetCredits: resetResolution.snapshot,
+                now: snapshot.updatedAt),
             sourceLabel: billingResult.sourceLabel,
             supplementalUsageTask: resetResolution.supplementalUsageTask,
             diagnostic: enrichedBilling.usedPercent == nil ? GrokStatusProbe.usageUnavailableMessage : nil)

@@ -236,6 +236,17 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
     when `resetsAt` matches a common cycle, falling back to the registered
     "Credits" label otherwise. Settings and history views continue to use
     "Credits" as the stable metric name.
+- **Usage breakdown by product**:
+  - From `config.productUsage` on `/v1/billing?format=credits`
+    (`[{ "product": "GrokBuild", "usagePercent": 1.0 }]`; also `GrokChat`,
+    `GrokImagine`, `GrokAppBuilder`). The grok.com fallback keeps the proxy's
+    products when its own snapshot has none.
+  - Every product percentage is a share of the same weekly pool as the primary
+    window, so it is never a rate window or progress bar. It renders as plain
+    `Usage breakdown` text rows (`Grok Build 1%`) under the weekly bar, sorted by
+    share, with zero-usage products omitted.
+  - Shown only when the primary window exists. Malformed arrays or entries are
+    dropped individually and never change the weekly total or period.
 - **Usage-limit reset coupons**:
   - From `GetRemainingResets`, not from `/v1/billing?format=credits`.
   - Shown as a `Limit Reset Credits` detail row (`1 available`, next expiry).

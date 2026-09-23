@@ -67,7 +67,8 @@ public enum GrokCreditsProxyFetcher {
                 usedPercent: min(100, max(0, percent)),
                 resetsAt: resetsAt,
                 windowMinutes: windowMinutes,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                productUsage: config.productUsage?.values ?? [])
         }
 
         if let cap = config.onDemandCap?.val,
@@ -79,7 +80,8 @@ public enum GrokCreditsProxyFetcher {
                 usedPercent: percent,
                 resetsAt: resetsAt,
                 windowMinutes: windowMinutes,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                productUsage: config.productUsage?.values ?? [])
         }
 
         if resetsAt != nil {
@@ -87,7 +89,8 @@ public enum GrokCreditsProxyFetcher {
                 usedPercent: nil,
                 resetsAt: resetsAt,
                 windowMinutes: windowMinutes,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                productUsage: config.productUsage?.values ?? [])
         }
 
         throw GrokWebBillingError.parseFailed
@@ -115,6 +118,37 @@ public enum GrokCreditsProxyFetcher {
         let onDemandCap: CreditsAmount?
         let onDemandUsed: CreditsAmount?
         let subscriptionTier: String?
+        let productUsage: LossyProductUsageArray?
+    }
+
+    private struct LossyProductUsageArray: Decodable {
+        let values: [GrokProductUsage]
+
+        init(from decoder: Decoder) {
+            self.values = (try? decoder.singleValueContainer().decode([LossyProductUsage].self))?
+                .compactMap(\.value) ?? []
+        }
+    }
+
+    private struct LossyProductUsage: Decodable {
+        let value: GrokProductUsage?
+
+        private enum CodingKeys: String, CodingKey {
+            case product
+            case usagePercent
+        }
+
+        init(from decoder: Decoder) {
+            let container = try? decoder.container(keyedBy: CodingKeys.self)
+            let product = (try? container?.decode(String.self, forKey: .product))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let percent = try? container?.decode(Double.self, forKey: .usagePercent)
+            if let product, !product.isEmpty, let percent, percent.isFinite, percent >= 0 {
+                self.value = GrokProductUsage(product: product, usedPercent: percent)
+            } else {
+                self.value = nil
+            }
+        }
     }
 
     private struct CurrentPeriod: Decodable {

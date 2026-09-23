@@ -61,7 +61,8 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
 
     /// Keep period and plan metadata a second billing surface did not publish. Usage percent
     /// always stays with the surface that produced this snapshot, so an unknown percent is
-    /// never backfilled from another response.
+    /// never backfilled from another response. Product shares compose that same payload's
+    /// `usedPercent` and are never borrowed from another billing surface.
     func completing(with other: GrokWebBillingSnapshot) -> GrokWebBillingSnapshot {
         GrokWebBillingSnapshot(
             usedPercent: self.usedPercent,
@@ -70,7 +71,7 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
             subscriptionTier: self.subscriptionTier ?? other.subscriptionTier,
             usedPercentIsWirePublished: self.usedPercentIsWirePublished,
             usedPercentIsImplicitZero: self.usedPercentIsImplicitZero,
-            productUsage: self.productUsage.isEmpty ? other.productUsage : self.productUsage)
+            productUsage: self.productUsage)
     }
 }
 

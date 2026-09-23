@@ -120,6 +120,45 @@ struct GrokCreditsProxyFetcherTests {
     }
 
     @Test
+    func `unknown proxy usage does not attach its products to grok dot com totals`() async throws {
+        let now = try Self.date("2026-08-12T00:00:00Z")
+        let proxy = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {"config":{"currentPeriod":{"start":"2026-08-06T00:00:00Z","end":"2026-08-13T00:00:00Z"},
+        "productUsage":[{"product":"GrokBuild","usagePercent":3}]}}
+        """.utf8), now: now)
+        #expect(proxy.usedPercent == nil)
+        #expect(proxy.windowMinutes == 10080)
+        #expect(proxy.productUsage == [GrokProductUsage(product: "GrokBuild", usedPercent: 3)])
+
+        let grpcSnapshots = [
+            GrokWebBillingSnapshot(usedPercent: 12, resetsAt: nil),
+            GrokWebBillingSnapshot(
+                usedPercent: 0,
+                resetsAt: nil,
+                usedPercentIsWirePublished: false,
+                usedPercentIsImplicitZero: true),
+        ]
+        for grpcSnapshot in grpcSnapshots {
+            let result = try await GrokOAuthFetchStrategy.resolvingUnknownUsage(
+                proxy,
+                credentials: Self.credentials,
+                grpcBilling: { _ in grpcSnapshot })
+            let usage = GrokUsageSnapshot(
+                billing: nil,
+                webBilling: result.snapshot,
+                credentials: nil,
+                localSummary: nil,
+                cliVersion: nil,
+                updatedAt: now).toUsageSnapshot()
+
+            #expect(result.snapshot.usedPercent == grpcSnapshot.usedPercent)
+            #expect(result.snapshot.productUsage.isEmpty)
+            #expect(usage.primary?.usedPercent == grpcSnapshot.usedPercent)
+            #expect(!usage.details.contains { $0.title == "Usage breakdown" })
+        }
+    }
+
+    @Test
     func `completion never pairs a duration with a different reset`() {
         let original = GrokWebBillingSnapshot(
             usedPercent: 90,
@@ -848,11 +887,16 @@ extension GrokCreditsProxyFetcherTests {
     @Test
     func `billing snapshot copies keep product composition`() {
         let products = [GrokProductUsage(product: "GrokBuild", usedPercent: 1)]
-        let proxy = GrokWebBillingSnapshot(usedPercent: 1, resetsAt: nil, productUsage: products)
-        let empty = GrokWebBillingSnapshot(usedPercent: 2, resetsAt: nil)
-        #expect(proxy.applying(subscriptionTier: "SuperGrok").productUsage == products)
-        #expect(empty.completing(with: proxy).productUsage == products)
-        #expect(proxy.completing(with: empty).productUsage == products)
+        let proxyWithProducts = GrokWebBillingSnapshot(usedPercent: 1, resetsAt: nil, productUsage: products)
+        let grpcLike = GrokWebBillingSnapshot(usedPercent: 2, resetsAt: nil)
+        let otherProducts = GrokWebBillingSnapshot(
+            usedPercent: 3,
+            resetsAt: nil,
+            productUsage: [GrokProductUsage(product: "GrokChat", usedPercent: 3)])
+        #expect(proxyWithProducts.applying(subscriptionTier: "SuperGrok").productUsage == products)
+        #expect(grpcLike.completing(with: proxyWithProducts).productUsage.isEmpty)
+        #expect(proxyWithProducts.completing(with: grpcLike).productUsage == products)
+        #expect(proxyWithProducts.completing(with: otherProducts).productUsage == products)
     }
 
     @Test

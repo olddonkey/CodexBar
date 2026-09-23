@@ -239,8 +239,9 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 - **Usage breakdown by product**:
   - From `config.productUsage` on `/v1/billing?format=credits`
     (`[{ "product": "GrokBuild", "usagePercent": 1.0 }]`; also `GrokChat`,
-    `GrokImagine`, `GrokAppBuilder`). The grok.com fallback keeps the proxy's
-    products when its own snapshot has none.
+    `GrokImagine`, `GrokAppBuilder`). Shares only appear next to the total from
+    the same payload. If the proxy sends products without a total and the
+    percent comes from the grok.com fallback, the products are dropped.
   - Every product percentage is a share of the same weekly pool as the primary
     window, so it is never a rate window or progress bar. It renders as plain
     `Usage breakdown` text rows (`Grok Build 1%`) under the weekly bar, sorted by

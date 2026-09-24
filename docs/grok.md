@@ -246,8 +246,12 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
     window, so it is never a rate window or progress bar. It renders as plain
     `Usage breakdown` text rows (`Grok Build 1%`) under the weekly bar, sorted by
     share, with zero-usage products omitted.
-  - Shown only when the primary window exists. Malformed arrays or entries are
-    dropped individually and never change the weekly total or period.
+  - Shown only when the primary window comes from the wire `creditUsagePercent`
+    and the kept product shares add up to that raw (unclamped) percentage within
+    1 percentage point. Every sample so far satisfies this (100 = 46 + 45 + 7 + 2,
+    20 = 20, 1 = 1). Shares are dropped under the on-demand `used/cap` fallback,
+    under a period-only answer, and whenever they don't add up. Malformed arrays or
+    entries are dropped individually and never change the weekly total or period.
 - **Usage-limit reset coupons**:
   - From `GetRemainingResets`, not from `/v1/billing?format=credits`.
   - Shown as a `Limit Reset Credits` detail row (`1 available`, next expiry).

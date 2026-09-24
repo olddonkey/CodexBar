@@ -27,6 +27,7 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
     public let usedPercentIsWirePublished: Bool
     /// The parser validated an active current period with an omitted proto3 usage scalar.
     public let usedPercentIsImplicitZero: Bool
+    /// Shares compose this snapshot's credit `usedPercent` from the same payload before clamping; empty if unverified.
     public let productUsage: [GrokProductUsage]
 
     public init(

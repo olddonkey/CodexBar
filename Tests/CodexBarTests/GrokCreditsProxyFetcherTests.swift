@@ -128,7 +128,7 @@ struct GrokCreditsProxyFetcherTests {
         """.utf8), now: now)
         #expect(proxy.usedPercent == nil)
         #expect(proxy.windowMinutes == 10080)
-        #expect(proxy.productUsage == [GrokProductUsage(product: "GrokBuild", usedPercent: 3)])
+        #expect(proxy.productUsage.isEmpty)
 
         let grpcSnapshots = [
             GrokWebBillingSnapshot(usedPercent: 12, resetsAt: nil),
@@ -853,8 +853,8 @@ extension GrokCreditsProxyFetcherTests {
             (#", "productUsage":[{"product":"  ","usagePercent":1}]"#, []),
             (#", "productUsage":[{"product":"GrokImagine","usagePercent":1e400}]"#, []),
             (
-                #", "productUsage":[{"product":"GrokChat","usagePercent":2},42]"#,
-                [GrokProductUsage(product: "GrokChat", usedPercent: 2)]),
+                #", "productUsage":[{"product":"GrokChat","usagePercent":42},42]"#,
+                [GrokProductUsage(product: "GrokChat", usedPercent: 42)]),
         ]
         for (fragment, expectedProducts) in cases {
             let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)\(fragment)}}".utf8), now: now)
@@ -870,8 +870,7 @@ extension GrokCreditsProxyFetcherTests {
     }
 
     @Test
-    func `products survive proxy fallback result branches`() throws {
-        let expected = [GrokProductUsage(product: "GrokBuild", usedPercent: 3)]
+    func `products attach only to the published credit percentage`() throws {
         let cases: [(String, Double?)] = [
             (#""onDemandCap":{"val":100},"onDemandUsed":{"val":3}"#, 3),
             (#""billingPeriodEnd":"2026-09-27T00:00:00Z""#, nil),
@@ -880,8 +879,71 @@ extension GrokCreditsProxyFetcherTests {
             let payload = "{\"config\":{\(fields),\"productUsage\":[{\"product\":\"GrokBuild\",\"usagePercent\":3}]}}"
             let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data(payload.utf8))
             #expect(snapshot.usedPercent == percent)
-            #expect(snapshot.productUsage == expected)
+            #expect(snapshot.productUsage.isEmpty)
         }
+    }
+
+    @Test
+    func `product shares that do not compose the credit percentage are dropped`() throws {
+        let now = try Self.date("2026-09-23T00:00:00Z")
+        let base = #"""
+        {"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2026-09-20T00:00:00Z","end":"2026-09-27T00:00:00Z"}
+        """#
+        let baseline = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)}}".utf8), now: now)
+        let products = [
+            #", "productUsage":[{"product":"GrokBuild","usagePercent":60}]"#,
+            #", "productUsage":[{"product":"GrokBuild","usagePercent":20},{"product":"GrokChat","usagePercent":5}]"#,
+        ]
+        for fragment in products {
+            let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)\(fragment)}}".utf8), now: now)
+            #expect(snapshot.productUsage.isEmpty)
+            #expect(snapshot.usedPercent == baseline.usedPercent)
+            #expect(snapshot.resetsAt == baseline.resetsAt)
+            #expect(snapshot.windowMinutes == baseline.windowMinutes)
+            #expect(snapshot.subscriptionTier == baseline.subscriptionTier)
+            #expect(snapshot.usedPercentIsWirePublished == baseline.usedPercentIsWirePublished)
+            #expect(snapshot.usedPercentIsImplicitZero == baseline.usedPercentIsImplicitZero)
+        }
+    }
+
+    @Test
+    func `product shares within rounding of the credit percentage are kept`() throws {
+        let rounded = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {"config":{"creditUsagePercent":10,"productUsage":[
+          {"product":"GrokBuild","usagePercent":6.0},
+          {"product":"GrokChat","usagePercent":3.6}
+        ]}}
+        """.utf8))
+        #expect(rounded.usedPercent == 10)
+        #expect(rounded.productUsage == [
+            GrokProductUsage(product: "GrokBuild", usedPercent: 6),
+            GrokProductUsage(product: "GrokChat", usedPercent: 3.6),
+        ])
+
+        let full = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {"config":{"creditUsagePercent":100,"productUsage":[
+          {"product":"GrokBuild","usagePercent":46},
+          {"product":"GrokAppBuilder","usagePercent":45},
+          {"product":"GrokChat","usagePercent":7},
+          {"product":"GrokAutomations","usagePercent":2}
+        ]}}
+        """.utf8))
+        #expect(full.usedPercent == 100)
+        #expect(full.productUsage == [
+            GrokProductUsage(product: "GrokBuild", usedPercent: 46),
+            GrokProductUsage(product: "GrokAppBuilder", usedPercent: 45),
+            GrokProductUsage(product: "GrokChat", usedPercent: 7),
+            GrokProductUsage(product: "GrokAutomations", usedPercent: 2),
+        ])
+    }
+
+    @Test
+    func `product shares use the raw overage credit percentage`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {"config":{"creditUsagePercent":120,"productUsage":[{"product":"GrokBuild","usagePercent":120}]}}
+        """.utf8))
+        #expect(snapshot.usedPercent == 100)
+        #expect(snapshot.productUsage == [GrokProductUsage(product: "GrokBuild", usedPercent: 120)])
     }
 
     @Test

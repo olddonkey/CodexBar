@@ -256,8 +256,10 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
     4 = 3 + 1, and 6 = 4 + 2. grok.com chat is `GrokChat`, which is product id 4 on
     `GetGrokCreditsConfig`; Build is id 2. Values are whole percents on both
     surfaces. Shares are dropped under the on-demand `used/cap` fallback,
-    under a period-only answer, and whenever they don't add up. Malformed arrays or
-    entries are dropped individually and never change the weekly total or period.
+    under a period-only answer, and whenever they don't add up. A single malformed
+    entry, or a non-array value, drops the whole breakdown. That way a partial
+    list can't pass the sum check as if it were complete. It never changes the
+    weekly total or period.
 - **Usage-limit reset coupons**:
   - From `GetRemainingResets`, not from `/v1/billing?format=credits`.
   - Shown as a `Limit Reset Credits` detail row (`1 available`, next expiry).

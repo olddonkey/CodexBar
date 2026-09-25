@@ -101,7 +101,7 @@ public enum GrokCreditsProxyFetcher {
         _ products: [GrokProductUsage],
         creditUsagePercent: Double) -> [GrokProductUsage]
     {
-        // Shares must compose this payload's credit percentage; mismatched or on-demand shapes are dropped.
+        // Shares must compose this payload's credit percentage; any malformed entry drops the breakdown.
         guard !products.isEmpty else { return [] }
         let sum = products.reduce(0) { $0 + $1.usedPercent }
         return abs(sum - creditUsagePercent) <= Self.productCompositionTolerancePercent ? products : []
@@ -133,32 +133,33 @@ public enum GrokCreditsProxyFetcher {
     }
 
     private struct LossyProductUsageArray: Decodable {
-        let values: [GrokProductUsage]
+        let values: [GrokProductUsage]?
 
         init(from decoder: Decoder) {
             self.values = (try? decoder.singleValueContainer().decode([LossyProductUsage].self))?
-                .compactMap(\.value) ?? []
+                .map(\.value)
         }
     }
 
     private struct LossyProductUsage: Decodable {
-        let value: GrokProductUsage?
+        let value: GrokProductUsage
 
         private enum CodingKeys: String, CodingKey {
             case product
             case usagePercent
         }
 
-        init(from decoder: Decoder) {
-            let container = try? decoder.container(keyedBy: CodingKeys.self)
-            let product = (try? container?.decode(String.self, forKey: .product))?
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let product = try container.decode(String.self, forKey: .product)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let percent = try? container?.decode(Double.self, forKey: .usagePercent)
-            if let product, !product.isEmpty, let percent, percent.isFinite, percent >= 0 {
-                self.value = GrokProductUsage(product: product, usedPercent: percent)
-            } else {
-                self.value = nil
+            let percent = try container.decode(Double.self, forKey: .usagePercent)
+            guard !product.isEmpty, percent.isFinite, percent >= 0 else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Invalid product usage"))
             }
+            self.value = GrokProductUsage(product: product, usedPercent: percent)
         }
     }
 

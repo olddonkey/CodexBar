@@ -885,16 +885,17 @@ extension GrokCreditsProxyFetcherTests {
         """#
         let baseline = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)}}".utf8), now: now)
         let cases: [(String, [GrokProductUsage])] = [
+            (#", "productUsage":null"#, []),
             (#", "productUsage":{}"#, []),
             (#", "productUsage":"wrong""#, []),
             (#", "productUsage":[{"product":"GrokBuild","usagePercent":"1"}]"#, []),
             (#", "productUsage":[{"usagePercent":1}]"#, []),
+            (#", "productUsage":[{"product":42,"usagePercent":1}]"#, []),
+            (#", "productUsage":[{"product":"GrokBuild"}]"#, []),
             (#", "productUsage":[{"product":"GrokBuild","usagePercent":-1}]"#, []),
             (#", "productUsage":[{"product":"  ","usagePercent":1}]"#, []),
             (#", "productUsage":[{"product":"GrokImagine","usagePercent":1e400}]"#, []),
-            (
-                #", "productUsage":[{"product":"GrokChat","usagePercent":42},42]"#,
-                [GrokProductUsage(product: "GrokChat", usedPercent: 42)]),
+            (#", "productUsage":[{"product":"GrokChat","usagePercent":42},42]"#, []),
         ]
         for (fragment, expectedProducts) in cases {
             let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)\(fragment)}}".utf8), now: now)
@@ -907,6 +908,44 @@ extension GrokCreditsProxyFetcherTests {
             #expect(snapshot.usedPercentIsImplicitZero == baseline.usedPercentIsImplicitZero)
         }
         #expect(baseline.productUsage.isEmpty)
+    }
+
+    @Test
+    func `a malformed product entry drops the whole breakdown near the tolerance`() throws {
+        let now = try Self.date("2026-09-23T00:00:00Z")
+        let base = #"""
+        {"config":{"creditUsagePercent":6,"currentPeriod":{"start":"2026-09-20T00:00:00Z",
+        "end":"2026-09-27T00:00:00Z"},"subscriptionTier":"SUPERGROK_HEAVY"
+        """#
+        let baseline = try GrokCreditsProxyFetcher.parseSnapshot(Data("\(base)}}".utf8), now: now)
+        let malformed = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        \(base),"productUsage":[{"product":"GrokChat","usagePercent":5},
+        {"product":"GrokBuild","usagePercent":"1"}]}}
+        """.utf8), now: now)
+
+        #expect(malformed.productUsage.isEmpty)
+        #expect(malformed.usedPercent == 6)
+        #expect(malformed.resetsAt == baseline.resetsAt)
+        #expect(malformed.windowMinutes == baseline.windowMinutes)
+        #expect(malformed.subscriptionTier == baseline.subscriptionTier)
+        #expect(malformed.usedPercentIsWirePublished == baseline.usedPercentIsWirePublished)
+        #expect(malformed.usedPercentIsImplicitZero == baseline.usedPercentIsImplicitZero)
+
+        let exactRemainder = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {"config":{"creditUsagePercent":5,"productUsage":[
+        {"product":"GrokChat","usagePercent":5},{"usagePercent":1}]}}
+        """.utf8), now: now)
+        #expect(exactRemainder.usedPercent == 5)
+        #expect(exactRemainder.productUsage.isEmpty)
+
+        let usage = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: malformed,
+            credentials: nil,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: now).toUsageSnapshot()
+        #expect(usage.details.isEmpty)
     }
 
     @Test

@@ -251,8 +251,11 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
     share, with zero-usage products omitted.
   - Shown only when the primary window comes from the wire `creditUsagePercent`
     and the kept product shares add up to that raw (unclamped) percentage within
-    1 percentage point. Every sample so far satisfies this (100 = 46 + 45 + 7 + 2,
-    20 = 20, 1 = 1). Shares are dropped under the on-demand `used/cap` fallback,
+    1 percentage point. Every sample so far satisfies this: 100 = 46 + 45 + 7 + 2,
+    20 = 20, 1 = 1, and the live Build + Chat payloads 2 = 1 + 1, 3 = 2 + 1,
+    4 = 3 + 1, and 6 = 4 + 2. grok.com chat is `GrokChat`, which is product id 4 on
+    `GetGrokCreditsConfig`; Build is id 2. Values are whole percents on both
+    surfaces. Shares are dropped under the on-demand `used/cap` fallback,
     under a period-only answer, and whenever they don't add up. Malformed arrays or
     entries are dropped individually and never change the weekly total or period.
 - **Usage-limit reset coupons**:

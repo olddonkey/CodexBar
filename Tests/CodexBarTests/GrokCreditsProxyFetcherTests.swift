@@ -820,6 +820,46 @@ extension GrokCreditsProxyFetcherTests {
         #expect(snapshot.productUsage == [GrokProductUsage(product: "GrokBuild", usedPercent: 1)])
     }
 
+    @Test(arguments: LiveMultiProductCreditsPayload.all)
+    func `live multi-product credits payloads compose the weekly total`(
+        fixture: LiveMultiProductCreditsPayload) throws
+    {
+        let now = try Self.date("2026-09-25T01:00:00Z")
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data(fixture.payload.utf8), now: now)
+
+        #expect(snapshot.usedPercent == fixture.usedPercent)
+        #expect(snapshot.windowMinutes == 10080)
+        #expect(try snapshot.resetsAt == Self.date("2026-09-27T18:42:45.537749+00:00"))
+        #expect(snapshot.productUsage == fixture.products)
+        #expect(snapshot.productUsage.reduce(0) { $0 + $1.usedPercent } == snapshot.usedPercent)
+    }
+
+    @Test
+    func `live multi-product payload renders one bar and a sorted breakdown`() throws {
+        let now = try Self.date("2026-09-25T01:00:00Z")
+        let parsed = try GrokCreditsProxyFetcher.parseSnapshot(
+            Data(LiveMultiProductCreditsPayload.p6.payload.utf8), now: now)
+        let usage = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: parsed,
+            credentials: nil,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: now).toUsageSnapshot()
+        let section = try #require(usage.details.first)
+
+        #expect(usage.primary?.usedPercent == 6)
+        #expect(usage.secondary == nil)
+        #expect(usage.tertiary == nil)
+        #expect(usage.extraRateWindows?.isEmpty != false)
+        #expect(usage.details.count == 1)
+        #expect(section.title == "Usage breakdown")
+        #expect(section.rows.map(\.label) == ["Grok Chat", "Grok Build"])
+        #expect(section.rows.map(\.value) == ["4%", "2%"])
+        #expect(section.rows.map(\.id) == ["grok.product.GrokChat", "grok.product.GrokBuild"])
+        #expect(section.rows.allSatisfy { $0.progress == nil })
+    }
+
     @Test
     func `proxy retains product wire order and unknown names`() throws {
         let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
@@ -1013,6 +1053,82 @@ extension GrokCreditsProxyFetcherTests {
         #expect(unknown.primary == nil)
         #expect(unknown.details.isEmpty)
     }
+}
+
+struct LiveMultiProductCreditsPayload: Sendable {
+    let payload: String
+    let usedPercent: Double
+    let products: [GrokProductUsage]
+
+    static let p2 = Self(
+        payload: [
+            #"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","#,
+            #""start":"2026-09-20T18:42:45.537749+00:00","#,
+            #""end":"2026-09-27T18:42:45.537749+00:00"},"creditUsagePercent":2.0,"onDemandCap":{"val":0},"#,
+            #""onDemandUsed":{"val":0},"productUsage":[{"product":"GrokBuild","usagePercent":1.0},"#,
+            #"{"product":"GrokChat","usagePercent":1.0}],"isUnifiedBillingUser":true,"#,
+            #""prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD","#,
+            #""billingPeriodStart":"2026-09-20T18:42:45.537749+00:00","#,
+            #""billingPeriodEnd":"2026-09-27T18:42:45.537749+00:00"}}"#,
+        ].joined(),
+        usedPercent: 2,
+        products: [
+            GrokProductUsage(product: "GrokBuild", usedPercent: 1),
+            GrokProductUsage(product: "GrokChat", usedPercent: 1),
+        ])
+
+    static let p3 = Self(
+        payload: [
+            #"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","#,
+            #""start":"2026-09-20T18:42:45.537749+00:00","#,
+            #""end":"2026-09-27T18:42:45.537749+00:00"},"creditUsagePercent":3.0,"onDemandCap":{"val":0},"#,
+            #""onDemandUsed":{"val":0},"productUsage":[{"product":"GrokChat","usagePercent":2.0},"#,
+            #"{"product":"GrokBuild","usagePercent":1.0}],"isUnifiedBillingUser":true,"#,
+            #""prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD","#,
+            #""billingPeriodStart":"2026-09-20T18:42:45.537749+00:00","#,
+            #""billingPeriodEnd":"2026-09-27T18:42:45.537749+00:00"}}"#,
+        ].joined(),
+        usedPercent: 3,
+        products: [
+            GrokProductUsage(product: "GrokChat", usedPercent: 2),
+            GrokProductUsage(product: "GrokBuild", usedPercent: 1),
+        ])
+
+    static let p4 = Self(
+        payload: [
+            #"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","#,
+            #""start":"2026-09-20T18:42:45.537749+00:00","#,
+            #""end":"2026-09-27T18:42:45.537749+00:00"},"creditUsagePercent":4.0,"onDemandCap":{"val":0},"#,
+            #""onDemandUsed":{"val":0},"productUsage":[{"product":"GrokChat","usagePercent":3.0},"#,
+            #"{"product":"GrokBuild","usagePercent":1.0}],"isUnifiedBillingUser":true,"#,
+            #""prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD","#,
+            #""billingPeriodStart":"2026-09-20T18:42:45.537749+00:00","#,
+            #""billingPeriodEnd":"2026-09-27T18:42:45.537749+00:00"}}"#,
+        ].joined(),
+        usedPercent: 4,
+        products: [
+            GrokProductUsage(product: "GrokChat", usedPercent: 3),
+            GrokProductUsage(product: "GrokBuild", usedPercent: 1),
+        ])
+
+    static let p6 = Self(
+        payload: [
+            #"{"config":{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","#,
+            #""start":"2026-09-20T18:42:45.537749+00:00","#,
+            #""end":"2026-09-27T18:42:45.537749+00:00"},"creditUsagePercent":6.0,"onDemandCap":{"val":0},"#,
+            #""onDemandUsed":{"val":0},"productUsage":[{"product":"GrokChat","usagePercent":4.0},"#,
+            #"{"product":"GrokBuild","usagePercent":2.0}],"isUnifiedBillingUser":true,"#,
+            #""prepaidBalance":{"val":0},"topUpMethod":"TOP_UP_METHOD_SAVED_PAYMENT_METHOD","#,
+            #""billingPeriodStart":"2026-09-20T18:42:45.537749+00:00","#,
+            #""billingPeriodEnd":"2026-09-27T18:42:45.537749+00:00"}}"#,
+        ].joined(),
+        usedPercent: 6,
+        products: [
+            GrokProductUsage(product: "GrokChat", usedPercent: 4),
+            GrokProductUsage(product: "GrokBuild", usedPercent: 2),
+        ])
+
+    static let all = [Self.p2, Self.p3, Self.p4, Self.p6]
 }
 
 private final class EventRecorder: @unchecked Sendable {
